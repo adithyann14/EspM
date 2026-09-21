@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allows plain HTTP to local/LAN addresses (ESP32 does not run TLS).
+  HTTPS is still enforced for all public internet addresses.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- ESP32 soft-AP default -->
+        <domain includeSubdomains="false">192.168.4.1</domain>
+        <!-- Common home-network ranges -->
+        <domain includeSubdomains="false">192.168.0.1</domain>
+        <domain includeSubdomains="false">192.168.1.1</domain>
+        <domain includeSubdomains="false">10.0.0.1</domain>
+    </domain-config>
+    <!-- Allow any IP the user types (catch-all for local HTTP) -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

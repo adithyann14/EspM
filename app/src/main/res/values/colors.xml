@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Motor control buttons -->
+    <color name="motor_on">#1B8A3E</color>
+    <color name="motor_off">#C0392B</color>
+    <color name="on_white">#FFFFFF</color>
+
+    <!-- Status chip colors -->
+    <color name="status_connected_bg">#D4EDDA</color>
+    <color name="status_connected_text">#155724</color>
+    <color name="status_error_bg">#F8D7DA</color>
+    <color name="status_error_text">#721C24</color>
+
+    <!-- Sensor value colors -->
+    <color name="value_normal">#1A3A5C</color>
+    <color name="value_warn">#E67E22</color>
+
+    <!-- Seed for Material3 dynamic color -->
+    <color name="md_theme_seed">#1B7F8E</color>
+
+
+    <!-- Terminal / diagnostics view -->
+    <color name="terminal_bg">#0D0D0D</color>
+    <color name="terminal_text">#00C853</color>
+</resources>

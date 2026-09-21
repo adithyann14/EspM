@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/dashboardFragment">
+
+    <!-- ── Tab 1: Control / Dashboard ──────────────────────────────── -->
+    <fragment
+        android:id="@+id/dashboardFragment"
+        android:name="com.motordrive.esp32.ui.DashboardFragment"
+        android:label="Control">
+        <action
+            android:id="@+id/action_dashboard_to_settings"
+            app:destination="@id/settingsFragment"
+            app:enterAnim="@anim/slide_in_right"
+            app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left"
+            app:popExitAnim="@anim/slide_out_right" />
+    </fragment>
+
+    <!-- ── Tab 2: Stop-Timer ────────────────────────────────────────── -->
+    <fragment
+        android:id="@+id/timerFragment"
+        android:name="com.motordrive.esp32.ui.TimerFragment"
+        android:label="Timer">
+        <action
+            android:id="@+id/action_timer_to_settings"
+            app:destination="@id/settingsFragment"
+            app:enterAnim="@anim/slide_in_right"
+            app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left"
+            app:popExitAnim="@anim/slide_out_right" />
+    </fragment>
+
+    <!-- ── Tab 3: Scheduler ─────────────────────────────────────────── -->
+    <fragment
+        android:id="@+id/schedulerFragment"
+        android:name="com.motordrive.esp32.ui.SchedulerFragment"
+        android:label="Schedule">
+        <action
+            android:id="@+id/action_scheduler_to_settings"
+            app:destination="@id/settingsFragment"
+            app:enterAnim="@anim/slide_in_right"
+            app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left"
+            app:popExitAnim="@anim/slide_out_right" />
+    </fragment>
+
+    <!-- ── Settings (push from any tab's toolbar gear icon) ─────────── -->
+    <fragment
+        android:id="@+id/settingsFragment"
+        android:name="com.motordrive.esp32.ui.SettingsFragment"
+        android:label="Settings" />
+
+</navigation>

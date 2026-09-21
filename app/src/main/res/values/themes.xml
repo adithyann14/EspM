@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MotorDrive" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/md_theme_seed</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#CBE9ED</item>
+        <item name="colorOnPrimaryContainer">#001F26</item>
+        <item name="colorSecondary">#1A3A5C</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <!-- Transparent for edge-to-edge; toolbar handles inset padding -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

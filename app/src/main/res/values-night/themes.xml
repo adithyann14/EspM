@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MotorDrive" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#67D4E0</item>
+        <item name="colorOnPrimary">#003740</item>
+        <item name="colorPrimaryContainer">#00525F</item>
+        <item name="colorOnPrimaryContainer">#CBE9ED</item>
+        <item name="colorSecondary">#A8C4D8</item>
+        <item name="colorOnSecondary">#0F2940</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
