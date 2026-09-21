@@ -1,0 +1,112 @@
+name: Build Unsigned Release APK
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+#  • Automatic : push to main / master
+#  • Manual    : Actions → "Run workflow"
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  #  JOB: build-unsigned-release
+  # ════════════════════════════════════════════════════════════════════════════
+  build-unsigned-release:
+    name: Assemble Unsigned Release
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. JDK ───────────────────────────────────────────────────────────────
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      # ── 3. Permissions ───────────────────────────────────────────────────────
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ── 4. Build unsigned release APK ────────────────────────────────────────
+      #
+      #  No signing flags passed → AGP produces app-release-unsigned.apk.
+      #  Sign it locally in Termux with your own keystore (see README or
+      #  the apksigner command in the job summary below).
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Build unsigned release APK
+        run: |
+          ./gradlew assembleRelease \
+            --stacktrace \
+            --no-daemon
+
+      # ── 5. Rename APK ────────────────────────────────────────────────────────
+      - name: Rename output APK
+        run: |
+          SRC=app/build/outputs/apk/release/app-release-unsigned.apk
+          DEST=app/build/outputs/apk/release/MotorDrive-unsigned-run${{ github.run_number }}.apk
+          mv "$SRC" "$DEST"
+          echo "APK_PATH=$DEST"          >> $GITHUB_ENV
+          echo "APK_NAME=$(basename $DEST)" >> $GITHUB_ENV
+          echo "APK_SIZE=$(du -sh $DEST | cut -f1)" >> $GITHUB_ENV
+
+      # ── 6. Upload artifact ───────────────────────────────────────────────────
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MotorDrive-unsigned-run${{ github.run_number }}
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── 7. Job summary ───────────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          ICON=$( [ "$STATUS" = "success" ] && echo "✅" || echo "❌" )
+
+          echo "## ${ICON} Unsigned Release — Run #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Status       | \`$STATUS\`                       |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch       | \`${{ github.ref_name }}\`        |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit       | \`${{ github.sha }}\`             |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.event_name }}         |" >> $GITHUB_STEP_SUMMARY
+          echo "| APK name     | \`$APK_NAME\`                    |" >> $GITHUB_STEP_SUMMARY
+          echo "| APK size     | $APK_SIZE                        |" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📲 Sign in Termux" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo '# One-time setup' >> $GITHUB_STEP_SUMMARY
+          echo 'pkg install android-tools' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '# Edit these four variables' >> $GITHUB_STEP_SUMMARY
+          echo 'APK_IN=~/downloads/'"$APK_NAME" >> $GITHUB_STEP_SUMMARY
+          echo 'KEYSTORE=~/keystore.jks' >> $GITHUB_STEP_SUMMARY
+          echo 'KEY_ALIAS=your_alias' >> $GITHUB_STEP_SUMMARY
+          echo 'STORE_PASS=your_store_pass' >> $GITHUB_STEP_SUMMARY
+          echo 'KEY_PASS=your_key_pass' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '# Align then sign' >> $GITHUB_STEP_SUMMARY
+          echo 'zipalign -v -p 4 "$APK_IN" /tmp/aligned.apk' >> $GITHUB_STEP_SUMMARY
+          echo 'apksigner sign \' >> $GITHUB_STEP_SUMMARY
+          echo '  --ks "$KEYSTORE" \' >> $GITHUB_STEP_SUMMARY
+          echo '  --ks-key-alias "$KEY_ALIAS" \' >> $GITHUB_STEP_SUMMARY
+          echo '  --ks-pass "pass:$STORE_PASS" \' >> $GITHUB_STEP_SUMMARY
+          echo '  --key-pass "pass:$KEY_PASS" \' >> $GITHUB_STEP_SUMMARY
+          echo '  --out ~/downloads/MotorDrive-release.apk \' >> $GITHUB_STEP_SUMMARY
+          echo '  /tmp/aligned.apk' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

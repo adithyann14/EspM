@@ -1,0 +1,66 @@
+name: Build Debug APK 
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    name: Assemble Debug
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. JDK ────────────────────────────────────────────────
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle          # caches ~/.gradle automatically
+
+      # ── 3. Permissions ────────────────────────────────────────
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ── 4. Build ──────────────────────────────────────────────
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      # ── 5. Upload artifact ────────────────────────────────────
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MotorDrive-debug-run${{ github.run_number }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      # ── 6. Job summary ────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          ICON=$( [ "$STATUS" = "success" ] && echo "✅" || echo "❌" )
+
+          echo "## ${ICON} Debug Build — Run #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Status   | \`$STATUS\`                          |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch   | \`${{ github.ref_name }}\`            |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit   | \`${{ github.sha }}\`                 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.event_name }}        |" >> $GITHUB_STEP_SUMMARY
+
+          # APK size — only if the file was actually produced
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          if [ -f "$APK" ]; then
+            SIZE=$(du -sh "$APK" | cut -f1)
+            echo "| APK size | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          fi
