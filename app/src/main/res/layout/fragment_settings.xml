@@ -107,13 +107,13 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Current"
+                            android:text="Current of R Phase"
                             android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="ACS712 reading (A) — running threshold on ESP (0.10 A)"
+                            android:text="ACS712 reading (A) — running threshold on ESP (0.10 A) on R-phase line · I > 0.1 A = running"
                             android:textAppearance="?attr/textAppearanceBodySmall"
                             android:textColor="?attr/colorOnSurfaceVariant" />
                     </LinearLayout>
@@ -303,6 +303,105 @@
                     android:layout_marginBottom="16dp" />
             </LinearLayout>
 
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- SECTION: OTA FIRMWARE UPDATE                      -->
+            <!-- Password-protected. Receiver OTA triggered via    -->
+            <!-- ESP-NOW from sender — receiver joins OTA AP.      -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="OTA FIRMWARE UPDATE"
+                android:textAppearance="?attr/textAppearanceLabelSmall"
+                android:textColor="?attr/colorPrimary"
+                android:letterSpacing="0.1"
+                android:layout_marginTop="28dp"
+                android:layout_marginBottom="10dp" />
+
+            <!-- Target toggle -->
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/toggleOtaTarget"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                app:singleSelection="true"
+                app:selectionRequired="true">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnOtaSender"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="📡  Sender"
+                    style="@style/Widget.Material3.Button.OutlinedButton" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnOtaReceiver"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🔌  Receiver"
+                    style="@style/Widget.Material3.Button.OutlinedButton" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <!-- OTA Password -->
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="OTA Password"
+                android:layout_marginBottom="10dp"
+                app:endIconMode="password_toggle"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/editOtaPass"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textPassword"
+                    android:fontFamily="monospace" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <!-- Enable button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnEnableOta"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="ENABLE OTA →"
+                android:layout_marginBottom="10dp"
+                app:cornerRadius="12dp"
+                style="@style/Widget.Material3.Button.TonalButton" />
+
+            <!-- Info / instructions panel -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/otaInfoCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone"
+                app:cardElevation="0dp"
+                app:cardCornerRadius="10dp"
+                app:strokeColor="?attr/colorOutlineVariant"
+                app:strokeWidth="1dp"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/tvOtaInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:padding="14dp"
+                    android:text=""
+                    android:fontFamily="monospace"
+                    android:textSize="12sp"
+                    android:textColor="?attr/colorOnSurface" />
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Safe: CRC-verified before applying. Power loss during flash keeps old firmware intact."
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:layout_marginBottom="16dp" />
+
             <!-- Save & Connect -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnSave"
@@ -464,6 +563,16 @@
                             android:textAppearance="?attr/textAppearanceTitleSmall" />
 
                         <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnViewFullSerial"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:text="Full →"
+                            android:textSize="12sp"
+                            android:layout_marginEnd="6dp"
+                            app:cornerRadius="8dp"
+                            style="@style/Widget.Material3.Button.OutlinedButton" />
+
+                        <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnRefreshSerial"
                             android:layout_width="wrap_content"
                             android:layout_height="36dp"
@@ -542,6 +651,27 @@
                             android:layout_weight="1"
                             android:text="🗒  App Logcat"
                             android:textAppearance="?attr/textAppearanceTitleSmall" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnViewFullLogcat"
+                            android:layout_width="0dp"
+                            android:layout_height="32dp"
+                            android:layout_weight="1"
+                            android:text="View Full →"
+                            android:textSize="11sp"
+                            android:layout_marginEnd="6dp"
+                            app:cornerRadius="8dp"
+                            style="@style/Widget.Material3.Button.OutlinedButton" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnViewFullLogcat"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:text="Full →"
+                            android:textSize="12sp"
+                            android:layout_marginEnd="6dp"
+                            app:cornerRadius="8dp"
+                            style="@style/Widget.Material3.Button.OutlinedButton" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnExportLogcat"

@@ -76,8 +76,10 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
     private fun setupToolbar() {
         b.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.action_settings -> { findNavController().navigate(R.id.action_dashboard_to_settings); true }
-                R.id.action_refresh  -> { vm.refresh(); true }
+                R.id.action_settings -> {
+                    findNavController().navigate(R.id.action_dashboard_to_settings); true
+                }
+                R.id.action_refresh -> { vm.refresh(); true }
                 else -> false
             }
         }
@@ -109,21 +111,28 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
     private fun observeVm() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+
                 launch { vm.motorState.collect { state ->
                     updateStatusCard(state)
                     voltageModule?.update(state)
                     currentModule?.update(state)
                     waterModule?.update(state)
                 }}
+
                 launch { vm.isLoading.collect { loading ->
                     b.progressBar.isVisible = loading
                     b.btnMotorOn.isEnabled  = !loading
                     b.btnMotorOff.isEnabled = !loading
                 }}
-                launch { vm.config.collect { cfg -> b.connectionUrlText.text = cfg.baseUrl }}
-                launch { vm.sensorVisibility.collect { v -> applySensorVisibility(v) }}
+
+                launch { vm.config.collect { cfg -> b.connectionUrlText.text = cfg.baseUrl } }
+
+                launch { vm.sensorVisibility.collect { v -> applySensorVisibility(v) } }
+
                 launch { vm.pendingAlerts.collect { alerts ->
-                    if (alerts.isNotEmpty() && !alertsShown) { alertsShown = true; showAlertDialog(alerts) }
+                    if (alerts.isNotEmpty() && !alertsShown) {
+                        alertsShown = true; showAlertDialog(alerts)
+                    }
                 }}
             }
         }
@@ -136,35 +145,42 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
     }
 
     private fun updateStatusCard(state: MotorState) {
-        // ── Connection chip ───────────────────────────────────────────────
+
+        // ── Connection chip — just Connected / Disconnected ───────────────
+        // Detailed errors go to AppLogger only; truncated messages removed.
         if (state.isConnected) {
-            val linkIcon = if (state.linkOk) "● " else "◌ "
-            b.chipConnection.text = "${linkIcon}Connected${if (!state.linkOk) " (RF down)" else ""}"
+            val linkLabel = if (state.linkOk) "● Connected" else "◌ Connected  (RF down)"
+            b.chipConnection.text = linkLabel
             b.chipConnection.chipBackgroundColor = ColorStateList.valueOf(
                 requireContext().getColor(
                     if (state.linkOk) R.color.status_connected_bg else R.color.status_error_bg
                 )
             )
-            b.chipConnection.setTextColor(requireContext().getColor(
-                if (state.linkOk) R.color.status_connected_text else R.color.status_error_text
-            ))
+            b.chipConnection.setTextColor(
+                requireContext().getColor(
+                    if (state.linkOk) R.color.status_connected_text else R.color.status_error_text
+                )
+            )
         } else {
-            b.chipConnection.text = "○ ${state.errorMessage?.take(28) ?: "Disconnected"}"
+            b.chipConnection.text = "○ Disconnected"
             b.chipConnection.chipBackgroundColor = ColorStateList.valueOf(
-                requireContext().getColor(R.color.status_error_bg))
-            b.chipConnection.setTextColor(requireContext().getColor(R.color.status_error_text))
+                requireContext().getColor(R.color.status_error_bg)
+            )
+            b.chipConnection.setTextColor(
+                requireContext().getColor(R.color.status_error_text)
+            )
         }
 
         // ── Last updated ──────────────────────────────────────────────────
-        if (state.lastUpdatedMs > 0L) {
-            val secs = (System.currentTimeMillis() - state.lastUpdatedMs) / 1000
-            b.lastUpdatedText.text = "Updated ${secs}s ago"
-        } else b.lastUpdatedText.text = ""
+        b.lastUpdatedText.text = if (state.lastUpdatedMs > 0L) {
+            val s = (System.currentTimeMillis() - state.lastUpdatedMs) / 1000
+            "Updated ${s}s ago"
+        } else ""
 
-        // ── Motor state banner — includes stall warning ───────────────────
+        // ── Motor state banner  (stall takes priority) ────────────────────
         when {
             state.motorOn && state.stall -> {
-                b.motorStateBanner.text = "⚠  MOTOR ON  —  STALL DETECTED"
+                b.motorStateBanner.text = "⚠  MOTOR ON  —  STALL"
                 b.motorStateBanner.setBackgroundColor(requireContext().getColor(R.color.value_warn))
                 b.motorStateBanner.setTextColor(requireContext().getColor(R.color.on_white))
                 b.btnMotorOn.isEnabled  = false
@@ -188,10 +204,13 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
     }
 
     private fun showAlertDialog(alerts: List<PendingAlert>) {
-        val icon = when (alerts.first().type) { "power_loss" -> "⚡"; "phase_fault" -> "⚠️"; "overload" -> "🔥"; else -> "ℹ️" }
+        val icon = when (alerts.first().type) {
+            "power_loss"  -> "⚡"; "phase_fault" -> "⚠️"; "overload" -> "🔥"; else -> "ℹ️"
+        }
         val body = alerts.joinToString("\n\n") { a ->
             val ts = if (a.timestamp > 0L)
-                java.text.SimpleDateFormat("dd MMM HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(a.timestamp * 1000L))
+                java.text.SimpleDateFormat("dd MMM HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date(a.timestamp * 1000L))
             else "Unknown time"
             "• ${a.message}\n  $ts"
         }
@@ -199,14 +218,16 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
             .setTitle("$icon  Alert${if (alerts.size > 1) "s" else ""}")
             .setMessage(body)
             .setPositiveButton("Acknowledge & Clear") { _, _ -> alertsShown = false; vm.clearAlerts() }
-            .setNegativeButton("Dismiss") { _, _ -> }
+            .setNegativeButton("Dismiss", null)
             .setCancelable(false).show()
     }
 
     private fun requestNotifPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED) {
+            ContextCompat.checkSelfPermission(
+                requireContext(), Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
             notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared layout for FullSerialFragment and FullLogcatFragment -->
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D0D0D">
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/appBarLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1A1A1A">
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            app:titleTextColor="#00C853"
+            app:navigationIcon="@drawable/ic_arrow_back"
+            app:navigationIconTint="#00C853" />
+    </com.google.android.material.appbar.AppBarLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+        <!-- Control bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:background="#1A1A1A">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/switchAutoScroll"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Auto-scroll"
+                android:textColor="#00C853"
+                android:textSize="12sp"
+                android:checked="true" />
+
+            <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
+
+            <TextView
+                android:id="@+id/tvLineCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0 lines"
+                android:textColor="#555555"
+                android:textSize="11sp"
+                android:fontFamily="monospace"
+                android:layout_marginEnd="10dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCopy"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="Copy"
+                android:textSize="11sp"
+                android:textColor="#00C853"
+                android:layout_marginEnd="6dp"
+                app:strokeColor="#333333"
+                app:cornerRadius="6dp"
+                style="@style/Widget.Material3.Button.OutlinedButton" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnClearLog"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="Clear"
+                android:textSize="11sp"
+                android:textColor="#00C853"
+                app:strokeColor="#333333"
+                app:cornerRadius="6dp"
+                style="@style/Widget.Material3.Button.OutlinedButton" />
+        </LinearLayout>
+
+        <!-- Terminal area -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/logScrollView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="#0D0D0D"
+            android:fillViewport="true">
+
+            <TextView
+                android:id="@+id/tvLogContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textColor="#00C853"
+                android:textSize="11sp"
+                android:fontFamily="monospace"
+                android:padding="12dp"
+                android:textIsSelectable="true"
+                android:lineSpacingMultiplier="1.2" />
+        </androidx.core.widget.NestedScrollView>
+    </LinearLayout>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

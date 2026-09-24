@@ -18,17 +18,24 @@ import com.motordrive.esp32.AppLogger
 import com.motordrive.esp32.FeatureConfig
 import com.motordrive.esp32.R
 import com.motordrive.esp32.data.ConnectionConfig
+import com.motordrive.esp32.data.Esp32Repository
 import com.motordrive.esp32.databinding.FragmentSettingsBinding
 import com.motordrive.esp32.viewmodel.DashboardViewModel
 import com.motordrive.esp32.viewmodel.NotificationSettings
 import com.motordrive.esp32.viewmodel.SensorVisibility
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
     private var _b: FragmentSettingsBinding? = null
     private val b get() = _b!!
     private val vm: DashboardViewModel by activityViewModels()
+
+    private val prefs by lazy {
+        requireContext().getSharedPreferences("mdc_prefs", android.content.Context.MODE_PRIVATE)
+    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -39,10 +46,11 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         setupConnectionModeToggle()
         configureSensorRows()
         populateFields()              // values first — no listeners yet
-        setupSensorToggleListeners()  // instant-save, after populate
-        setupNotifToggleListeners()   // instant-save, after populate
+        setupSensorToggleListeners()
+        setupNotifToggleListeners()
         setupSaveButton()
         setupDiagnostics()
+        setupOta()
     }
 
     override fun onDestroyView() { super.onDestroyView(); _b = null }
@@ -81,7 +89,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             FeatureConfig.ENABLE_WATER_FLOW
     }
 
-    // ── Populate saved values BEFORE any listeners are attached ───────────
     private fun populateFields() {
         val cfg = vm.config.value
         b.editIp.setText(cfg.directIp)
@@ -103,19 +110,20 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             b.toggleConnectionMode.check(R.id.btnDirectWifi)
         }
 
-        // Sensor toggles (no listeners yet — no spurious saves)
         val vis = vm.sensorVisibility.value
         b.switchShowVoltage.isChecked = vis.showVoltage
         b.switchShowCurrent.isChecked = vis.showCurrent
         b.switchShowWater.isChecked   = vis.showWater
 
-        // Notification toggles (no listeners yet)
         val ns = vm.notifSettings.value
         b.switchPersistentNotif.isChecked = ns.persistentEnabled
         b.switchAlertNotif.isChecked      = ns.alertEnabled
+
+        // OTA password
+        b.editOtaPass.setText(prefs.getString("ota_pass", "motor123"))
+        b.toggleOtaTarget.check(R.id.btnOtaSender)
     }
 
-    // ── Sensor toggles — apply immediately ────────────────────────────────
     private fun setupSensorToggleListeners() {
         b.switchShowVoltage.setOnCheckedChangeListener { _, c ->
             vm.updateSensorVisibility(vm.sensorVisibility.value.copy(showVoltage = c))
@@ -128,7 +136,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
-    // ── Notification toggles — apply immediately ──────────────────────────
     private fun setupNotifToggleListeners() {
         b.switchPersistentNotif.setOnCheckedChangeListener { _, c ->
             vm.updateNotifSettings(vm.notifSettings.value.copy(persistentEnabled = c))
@@ -138,20 +145,23 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
-    // ── Save & Connect — connection settings only ─────────────────────────
     private fun setupSaveButton() {
         b.btnSave.setOnClickListener {
             val ip   = b.editIp.text?.toString()?.trim() ?: ""
             val port = b.editPort.text?.toString()?.toIntOrNull() ?: 80
             val poll = b.editPollInterval.text?.toString()?.toIntOrNull() ?: 3
 
-            if (ip.isBlank()) { b.ipLayout.error = "Enter a valid IP or hostname"; return@setOnClickListener }
+            if (ip.isBlank()) {
+                b.ipLayout.error = "Enter a valid IP or hostname"; return@setOnClickListener
+            }
             b.ipLayout.error = null
 
             val useServer = FeatureConfig.ENABLE_SERVER_MODE &&
                             b.toggleConnectionMode.checkedButtonId == R.id.btnServerMode
             val serverUrl = b.editServerUrl.text?.toString()?.trim() ?: ""
-            if (useServer && serverUrl.isBlank()) { b.serverUrlLayout.error = "Enter the server URL"; return@setOnClickListener }
+            if (useServer && serverUrl.isBlank()) {
+                b.serverUrlLayout.error = "Enter server URL"; return@setOnClickListener
+            }
             b.serverUrlLayout.error = null
 
             vm.updateConfig(ConnectionConfig(
@@ -166,10 +176,14 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
-    // ── Diagnostics: Serial Monitor + App Logcat ──────────────────────────
+    // ── Diagnostics ───────────────────────────────────────────────────────
     private fun setupDiagnostics() {
-
-        // Serial monitor — manual refresh fetches /api/logs from ESP
+        b.btnViewFullSerial.setOnClickListener {
+            findNavController().navigate(R.id.action_settings_to_full_serial)
+        }
+        b.btnViewFullLogcat.setOnClickListener {
+            findNavController().navigate(R.id.action_settings_to_full_logcat)
+        }
         b.btnRefreshSerial.setOnClickListener {
             b.btnRefreshSerial.isEnabled = false
             viewLifecycleOwner.lifecycleScope.launch {
@@ -180,8 +194,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.btnClearSerial.setOnClickListener {
             b.serialTerminalText.text = "— display cleared (ESP buffer intact) —"
         }
-
-        // App logcat — export text, clear
         b.btnExportLogcat.setOnClickListener {
             val text = AppLogger.export()
             if (text.isBlank()) {
@@ -193,8 +205,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_SUBJECT, "MotorDrive App Log")
                     putExtra(Intent.EXTRA_TEXT, text)
-                },
-                "Export App Log as…"
+                }, "Export App Log"
             ))
         }
         b.btnClearLogcat.setOnClickListener {
@@ -202,29 +213,98 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             Toast.makeText(requireContext(), "App log cleared", Toast.LENGTH_SHORT).show()
         }
 
-        // Live observation
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-
                 launch {
                     vm.espLogs.collect { lines ->
                         b.serialTerminalText.text = if (lines.isEmpty())
                             "— tap Refresh to fetch ESP log —"
-                        else
-                            lines.joinToString("\n")
+                        else lines.joinToString("\n")
                         b.serialScrollView.post { b.serialScrollView.fullScroll(View.FOCUS_DOWN) }
                     }
                 }
-
                 launch {
                     AppLogger.flow.collect { entries ->
-                        b.logcatText.text = if (entries.isEmpty())
-                            "— no events yet —"
-                        else
-                            entries.joinToString("\n") { it.format() }
+                        b.logcatText.text = if (entries.isEmpty()) "— no events yet —"
+                        else entries.joinToString("\n") { it.format() }
                         b.logcatScrollView.post { b.logcatScrollView.fullScroll(View.FOCUS_DOWN) }
                     }
                 }
+            }
+        }
+    }
+
+    // ── OTA ───────────────────────────────────────────────────────────────
+    private fun setupOta() {
+        b.toggleOtaTarget.addOnButtonCheckedListener { _, _, _ ->
+            b.otaInfoCard.isVisible = false   // hide info when target changes
+        }
+
+        b.btnEnableOta.setOnClickListener {
+            val pass = b.editOtaPass.text?.toString()?.trim() ?: ""
+            if (pass.isBlank()) {
+                Toast.makeText(requireContext(), "Enter the OTA password", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            // Persist password
+            prefs.edit().putString("ota_pass", pass).apply()
+
+            val isReceiver = b.toggleOtaTarget.checkedButtonId == R.id.btnOtaReceiver
+            if (isReceiver) {
+                triggerReceiverOta(pass)
+            } else {
+                showSenderOtaInfo(pass)
+            }
+        }
+    }
+
+    /** Sender OTA is always available — just tell the user the URL. */
+    private fun showSenderOtaInfo(pass: String) {
+        val cfg = vm.config.value
+        val url = "${cfg.baseUrl}/update"
+        b.tvOtaInfo.text =
+            "Sender OTA is always ready.\n\n" +
+            "Upload via browser or curl:\n" +
+            "  URL:  $url\n" +
+            "  User: admin\n" +
+            "  Pass: $pass\n\n" +
+            "curl -u admin:$pass -F \"image=@firmware.bin\" $url"
+        b.otaInfoCard.isVisible = true
+        AppLogger.log("OTA", "Sender OTA URL shown: $url")
+    }
+
+    /**
+     * Ask the Sender to forward an OTA-enable ESP-NOW packet to the Receiver.
+     * The Receiver then becomes a temporary Wi-Fi AP ("MCReceiver-OTA").
+     */
+    private fun triggerReceiverOta(pass: String) {
+        b.btnEnableOta.isEnabled = false
+        b.tvOtaInfo.text = "Contacting sender…"
+        b.otaInfoCard.isVisible = true
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { Esp32Repository(vm.config.value).enableReceiverOta(pass) }
+            }
+            b.btnEnableOta.isEnabled = true
+
+            if (result.isSuccess) {
+                b.tvOtaInfo.text =
+                    "✅ Receiver is now in OTA mode (5 min window).\n\n" +
+                    "Steps:\n" +
+                    "1. On your phone: connect Wi-Fi to\n" +
+                    "     MCReceiver-OTA\n" +
+                    "   Password: $pass\n\n" +
+                    "2. Open browser →\n" +
+                    "     http://192.168.4.1/update\n\n" +
+                    "3. Upload receiver firmware .bin\n\n" +
+                    "4. Reconnect phone to MotorControl\n" +
+                    "   when done."
+                AppLogger.log("OTA", "Receiver OTA triggered successfully")
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Unknown error"
+                b.tvOtaInfo.text = "❌ Failed to reach sender:\n$err"
+                AppLogger.log("OTA", "Receiver OTA failed: $err")
             }
         }
     }

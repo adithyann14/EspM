@@ -1,11 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  MODULE B — ACS712 Current Sensor
-  Shows the raw current reading in Amps.
-  Motor ON/OFF state is already displayed in the top banner — not repeated here.
-  Running threshold (0.10 A) is enforced on the receiver ESP, not in this app.
-  Disable: set FeatureConfig.ENABLE_CURRENT_SENSOR = false
--->
+<!-- MODULE B — ACS712 current on R-phase line.
+     Shows "—" when motor is off (noise suppressed).
+     Disable: set FeatureConfig.ENABLE_CURRENT_SENSOR = false -->
 <com.google.android.material.card.MaterialCardView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -23,7 +19,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="〰  Current  (A)"
+            android:text="〰  Phase Currents"
             android:textAppearance="?attr/textAppearanceTitleSmall"
             android:textColor="?attr/colorOnSurface"
             android:layout_marginBottom="12dp" />
@@ -38,7 +34,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="ACS712 reading"
+                android:text="Phase  R"
                 android:textAppearance="?attr/textAppearanceBodyMedium"
                 android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -49,8 +45,6 @@
                 android:text="—"
                 android:textAppearance="?attr/textAppearanceTitleLarge"
                 android:fontFamily="monospace" />
-
         </LinearLayout>
-
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

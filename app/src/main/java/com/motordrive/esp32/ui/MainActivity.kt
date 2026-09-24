@@ -30,8 +30,10 @@ class MainActivity : AppCompatActivity() {
         // Hide bottom nav on Settings (it's a push destination, not a tab)
         navController.addOnDestinationChangedListener { _, dest, _ ->
             binding.bottomNav.visibility = when (dest.id) {
-                R.id.settingsFragment -> View.GONE
-                else                  -> View.VISIBLE
+                R.id.settingsFragment,
+                R.id.fullSerialFragment,
+                R.id.fullLogcatFragment -> View.GONE
+                else                   -> View.VISIBLE
             }
         }
     }

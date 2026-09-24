@@ -1,21 +1,19 @@
 package com.motordrive.esp32.modules
 
-import android.content.res.ColorStateList
 import android.view.View
 import com.google.android.material.color.MaterialColors
+import com.motordrive.esp32.AppLogger
+import com.motordrive.esp32.R
 import com.motordrive.esp32.data.MotorState
 import com.motordrive.esp32.databinding.ModuleWaterFlowBinding
 
 /**
- * MODULE C — Pipe-end water sensor.
+ * MODULE C — Pipe-end water sensor. Single-line display, no sub-text.
  *
  * waterOk semantics (from receiver):
- *   true  = water confirmed at pipe end, OR motor is off (no check active)
- *   false = motor is ON but waiting for water (30 s auto cut-off in progress)
- *   null  = key absent in response (old firmware or sensor not connected)
- *
- * Cut-off logic (30 s) runs on the receiver, not here.
- * To DISABLE: set FeatureConfig.ENABLE_WATER_FLOW = false
+ *   true  = water confirmed, OR motor is off (no active check)
+ *   false = motor ON but waiting for flow (30 s cut-off in progress)
+ *   null  = key absent — logged silently, shown as "—"
  */
 class WaterFlowModule(view: View) {
 
@@ -25,33 +23,29 @@ class WaterFlowModule(view: View) {
         val waterOk = state.waterOk
         val motorOn = state.motorOn
 
-        val (statusText, subText, colorAttr) = when {
-            waterOk == null -> Triple(
-                "No Data",
-                "Sensor not connected or firmware too old",
-                com.google.android.material.R.attr.colorOutline
-            )
-            !motorOn -> Triple(
-                "—",
-                "Motor is off — no check active",
-                com.google.android.material.R.attr.colorOutline
-            )
-            waterOk -> Triple(
-                "● Water OK",
-                "Flow confirmed at pipe end",
-                androidx.appcompat.R.attr.colorPrimary
-            )
-            else -> Triple(
-                "⏳ Checking…",
-                "Waiting for flow — auto cut-off at 30 s",
-                androidx.appcompat.R.attr.colorError
-            )
+        when {
+            waterOk == null -> {
+                b.waterStatusText.text = "—"
+                b.waterStatusText.setTextColor(neutral())
+                AppLogger.log("WATER", "No sensor key in status response")
+            }
+            !motorOn -> {
+                b.waterStatusText.text = "—"
+                b.waterStatusText.setTextColor(neutral())
+            }
+            waterOk -> {
+                b.waterStatusText.text = "● Water OK"
+                b.waterStatusText.setTextColor(b.root.context.getColor(R.color.motor_on))
+            }
+            else -> {
+                b.waterStatusText.text = "⏳ Checking…"
+                b.waterStatusText.setTextColor(
+                    MaterialColors.getColor(b.root, androidx.appcompat.R.attr.colorError, 0)
+                )
+            }
         }
-
-        b.waterStatusText.text = statusText
-        b.waterSubtext.text    = subText
-        val color = MaterialColors.getColor(b.root, colorAttr, 0)
-        b.waterIcon.imageTintList = ColorStateList.valueOf(color)
-        b.waterStatusText.setTextColor(color)
     }
+
+    private fun neutral() =
+        MaterialColors.getColor(b.root, com.google.android.material.R.attr.colorOutline, 0)
 }

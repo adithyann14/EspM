@@ -74,6 +74,19 @@ class Esp32Repository(private val config: ConnectionConfig) {
         httpPostJson("${config.baseUrl}/api/time/sync", body); Unit
     }
 
+
+    // ── OTA ───────────────────────────────────────────────────────────────
+    /**
+     * Asks the Sender to send an ESP-NOW OTA-enable packet to the Receiver.
+     * The Receiver switches to AP mode "MCReceiver-OTA" and starts a
+     * password-protected HTTP update server for 5 minutes.
+     */
+    suspend fun enableReceiverOta(password: String): Result<Unit> = io {
+        val body = """{"pass":"${password}"}"""
+        httpPostJson("${config.baseUrl}/api/ota/receiver", body)
+        Unit
+    }
+
     // ── HTTP helpers ──────────────────────────────────────────────────────
     private suspend fun <T> io(block: () -> T): Result<T> =
         withContext(Dispatchers.IO) { runCatching(block) }
