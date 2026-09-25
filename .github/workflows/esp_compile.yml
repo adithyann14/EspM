@@ -58,8 +58,10 @@ jobs:
         id: cache-arduino
         uses: actions/cache@v4
         with:
-          path: ~/.arduino15
-          key: arduino-esp8266-${{ env.ESP8266_CORE_VERSION }}-lora-${{ env.LORA_LIB_VERSION }}
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-cli-${{ env.ARDUINO_CLI_VERSION }}-esp8266-${{ env.ESP8266_CORE_VERSION }}-lora-${{ env.LORA_LIB_VERSION }}
 
       # ── 5. Install ESP8266 core (skipped on cache hit) ────────────────
       - name: Update index & install ESP8266 core
@@ -75,17 +77,19 @@ jobs:
           arduino-cli lib install "LoRa@${{ env.LORA_LIB_VERSION }}"
 
       # ── 7. Compile ────────────────────────────────────────────────────
-      #  Flags tuned for NodeMCU 1.0 / ESP-12E
-      #    lwip=2         — use LwIP v2 (better memory, needed for ESP-NOW)
-      #    MMU=3          — 32K ICACHE + 32K RAM (balanced; increase if OOM)
-      #    eesz=4M2M      — 4 MB flash / 2 MB SPIFFS
-      #    FlashFreq=80   — 80 MHz flash (fastest; works on all NodeMCU boards)
-      #    CpuFrequency=80 — CPU at 80 MHz (stable for SPI + ESP-NOW)
+      #  FQBN options — all keys/values verified against esp8266 3.1.2 boards.txt
+      #    xtal=80        — CPU at 80 MHz (stable for SPI + ESP-NOW)
+      #    eesz=4M2M      — 4 MB flash, 2 MB LittleFS, ~1 MB OTA
+      #    ip=hb2f        — lwIP v2 Higher Bandwidth IPv4 (needed for ESP-NOW)
+      #    mmu=3232       — 32 KB cache + 32 KB IRAM (balanced)
+      #    exception=disabled — no C++ exceptions (saves ~2 KB flash)
+      #    ResetMethod=nodemcu — DTR/RTS auto-reset (NodeMCU v2 standard)
+      #    dbg=Disabled   — no debug output
+      #    lvl=None____   — no debug level (underscores are literal in boards.txt)
       - name: Compile ${{ matrix.sketch }}
         run: |
           arduino-cli compile \
-            --fqbn "${{ env.FQBN }}:xtal=80,eesz=4M2M,FlashFreq=80,lwip=2,MMU=3,exceptions=disabled,ResetMethod=nodemcu,dbg=Disabled,lvl=None____ " \
-            --build-property "build.extra_flags=-DPIO_FRAMEWORK_ARDUINO_LWIP2_HIGHER_BANDWIDTH" \
+            --fqbn "${{ env.FQBN }}:xtal=80,eesz=4M2M,ip=hb2f,mmu=3232,exception=disabled,ResetMethod=nodemcu,dbg=Disabled,lvl=None____" \
             --output-dir firmware-out/${{ matrix.sketch }} \
             --warnings default \
             ${{ matrix.path }}
