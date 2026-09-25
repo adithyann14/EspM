@@ -40,9 +40,15 @@ jobs:
         uses: actions/checkout@v4
 
       # ── 2. Install arduino-cli ────────────────────────────────────────
+      # FIX: use arduino/setup-arduino-cli@v2 instead of snap.
+      # snap strict confinement blocks arduino-cli from calling system Python,
+      # which the esp8266 core requires for mkbuildoptglobals.py at build time.
+      # The official action downloads the binary directly — no sandbox, exact
+      # version pinning, and system tools (python3, etc.) remain fully accessible.
       - name: Install arduino-cli ${{ env.ARDUINO_CLI_VERSION }}
-        run: |
-          sudo snap install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: ${{ env.ARDUINO_CLI_VERSION }}
 
       # ── 3. Configure ESP8266 board manager URL ─────────────────────────
       - name: Configure arduino-cli
@@ -81,13 +87,16 @@ jobs:
       #    ip=hb2f        — lwIP v2 Higher Bandwidth IPv4 (needed for ESP-NOW)
       #    mmu=3232       — 32 KB cache + 32 KB IRAM (balanced)
       #    exception=disabled — no C++ exceptions (saves ~2 KB flash)
-      #    ResetMethod=nodemcu — DTR/RTS auto-reset (NodeMCU v2 standard)
       #    dbg=Disabled   — no debug output
       #    lvl=None____   — no debug level (underscores are literal in boards.txt)
+      #
+      # FIX: removed ResetMethod=nodemcu — this menu option was removed from
+      # nodemcuv2 in esp8266 core 3.x. The CH340C chip handles DTR/RTS
+      # auto-reset at the hardware level; it is no longer a boards.txt option.
       - name: Compile ${{ matrix.sketch }}
         run: |
           arduino-cli compile \
-            --fqbn "${{ env.FQBN }}:xtal=80,eesz=4M2M,ip=hb2f,mmu=3232,exception=disabled,ResetMethod=nodemcu,dbg=Disabled,lvl=None____" \
+            --fqbn "${{ env.FQBN }}:xtal=80,eesz=4M2M,ip=hb2f,mmu=3232,exception=disabled,dbg=Disabled,lvl=None____" \
             --output-dir firmware-out/${{ matrix.sketch }} \
             --warnings default \
             ${{ matrix.path }}
