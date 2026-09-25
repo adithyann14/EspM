@@ -1,0 +1,131 @@
+name: ESP8266 Firmware Compile
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "arduino/**"          # only run when firmware changes
+      - ".github/workflows/esp_compile.yml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "arduino/**"
+  workflow_dispatch:          # allow manual trigger from Actions tab
+
+# ── Versions ────────────────────────────────────────────────────────────────
+env:
+  ARDUINO_CLI_VERSION: "1.2.2"
+  ESP8266_CORE_VERSION: "3.1.2"   # arduino-esp8266/Arduino
+  LORA_LIB_VERSION:    "0.8.0"    # sandeepmistry/arduino-LoRa
+  FQBN: "esp8266:esp8266:nodemcuv2"
+
+jobs:
+
+  compile-firmware:
+    name: Compile ${{ matrix.sketch }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false          # compile both even if one fails
+      matrix:
+        include:
+          - sketch: sender_esp8266
+            path:   arduino/sender_esp8266/sender_esp8266.ino
+          - sketch: receiver_esp8266
+            path:   arduino/receiver_esp8266/receiver_esp8266.ino
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Install arduino-cli ────────────────────────────────────────
+      - name: Install arduino-cli ${{ env.ARDUINO_CLI_VERSION }}
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
+            | BINDIR=$HOME/bin sh -s -- ${{ env.ARDUINO_CLI_VERSION }}
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      # ── 3. Configure ESP8266 board manager URL ─────────────────────────
+      - name: Configure arduino-cli
+        run: |
+          arduino-cli config init
+          arduino-cli config set board_manager.additional_urls \
+            https://arduino.esp8266.com/stable/package_esp8266com_index.json
+
+      # ── 4. Cache board core + libraries ──────────────────────────────
+      - name: Cache arduino data
+        id: cache-arduino
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino-esp8266-${{ env.ESP8266_CORE_VERSION }}-lora-${{ env.LORA_LIB_VERSION }}
+
+      # ── 5. Install ESP8266 core (skipped on cache hit) ────────────────
+      - name: Update index & install ESP8266 core
+        if: steps.cache-arduino.outputs.cache-hit != 'true'
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp8266:esp8266@${{ env.ESP8266_CORE_VERSION }}
+
+      # ── 6. Install LoRa library ───────────────────────────────────────
+      - name: Install LoRa library
+        if: steps.cache-arduino.outputs.cache-hit != 'true'
+        run: |
+          arduino-cli lib install "LoRa@${{ env.LORA_LIB_VERSION }}"
+
+      # ── 7. Compile ────────────────────────────────────────────────────
+      #  Flags tuned for NodeMCU 1.0 / ESP-12E
+      #    lwip=2         — use LwIP v2 (better memory, needed for ESP-NOW)
+      #    MMU=3          — 32K ICACHE + 32K RAM (balanced; increase if OOM)
+      #    eesz=4M2M      — 4 MB flash / 2 MB SPIFFS
+      #    FlashFreq=80   — 80 MHz flash (fastest; works on all NodeMCU boards)
+      #    CpuFrequency=80 — CPU at 80 MHz (stable for SPI + ESP-NOW)
+      - name: Compile ${{ matrix.sketch }}
+        run: |
+          arduino-cli compile \
+            --fqbn "${{ env.FQBN }}:xtal=80,eesz=4M2M,FlashFreq=80,lwip=2,MMU=3,exceptions=disabled,ResetMethod=nodemcu,dbg=Disabled,lvl=None____ " \
+            --build-property "build.extra_flags=-DPIO_FRAMEWORK_ARDUINO_LWIP2_HIGHER_BANDWIDTH" \
+            --output-dir firmware-out/${{ matrix.sketch }} \
+            --warnings default \
+            ${{ matrix.path }}
+
+      # ── 8. Upload .bin artifacts ──────────────────────────────────────
+      - name: Upload firmware binary
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.sketch }}-${{ github.run_number }}
+          path: firmware-out/${{ matrix.sketch }}/${{ matrix.sketch }}.ino.bin
+          retention-days: 30
+
+      # ── 9. Job summary ────────────────────────────────────────────────
+      - name: Build summary
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          ICON=$( [ "$STATUS" = "success" ] && echo "✅" || echo "❌" )
+
+          echo "## ${ICON} ESP8266 — ${{ matrix.sketch }} — run #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |"            >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|"             >> $GITHUB_STEP_SUMMARY
+          echo "| Status | \`$STATUS\` |"     >> $GITHUB_STEP_SUMMARY
+          echo "| FQBN   | \`${{ env.FQBN }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Core   | esp8266 ${{ env.ESP8266_CORE_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| LoRa   | ${{ env.LORA_LIB_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+          BIN=firmware-out/${{ matrix.sketch }}/${{ matrix.sketch }}.ino.bin
+          if [ -f "$BIN" ]; then
+            SIZE=$(du -sh "$BIN" | cut -f1)
+            echo "| .bin size | $SIZE |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔌 Flash with esptool (USB)" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "esptool.py --chip esp8266 --port /dev/ttyUSB0 \\" >> $GITHUB_STEP_SUMMARY
+            echo "  --baud 921600 write_flash \\" >> $GITHUB_STEP_SUMMARY
+            echo "  --flash_mode dio --flash_freq 80m --flash_size 4MB \\" >> $GITHUB_STEP_SUMMARY
+            echo "  0x00000 ${{ matrix.sketch }}.ino.bin" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
