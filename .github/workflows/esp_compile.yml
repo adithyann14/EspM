@@ -42,9 +42,7 @@ jobs:
       # ── 2. Install arduino-cli ────────────────────────────────────────
       - name: Install arduino-cli ${{ env.ARDUINO_CLI_VERSION }}
         run: |
-          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
-            | BINDIR=$HOME/bin sh -s -- ${{ env.ARDUINO_CLI_VERSION }}
-          echo "$HOME/bin" >> $GITHUB_PATH
+          sudo snap install arduino-cli
 
       # ── 3. Configure ESP8266 board manager URL ─────────────────────────
       - name: Configure arduino-cli
