@@ -42,6 +42,7 @@ jobs:
       # ── 2. Install arduino-cli ────────────────────────────────────────
       - name: Install arduino-cli ${{ env.ARDUINO_CLI_VERSION }}
         run: |
+          mkdir -p $HOME/bin
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
             | BINDIR=$HOME/bin sh -s -- ${{ env.ARDUINO_CLI_VERSION }}
           echo "$HOME/bin" >> $GITHUB_PATH
