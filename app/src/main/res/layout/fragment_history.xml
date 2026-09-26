@@ -29,8 +29,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:paddingHorizontal="16dp"
-            android:paddingVertical="8dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:gravity="center_vertical"
             android:background="?attr/colorSurfaceVariant">
 
             <TextView
@@ -45,7 +48,7 @@
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnClearHistory"
                 android:layout_width="wrap_content"
-                android:layout_height="28dp"
+                android:layout_height="36dp"
                 android:text="Clear"
                 android:textSize="11sp"
                 app:cornerRadius="8dp"

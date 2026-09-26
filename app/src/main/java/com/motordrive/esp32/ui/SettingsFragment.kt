@@ -183,10 +183,11 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
     // ── Diagnostics ───────────────────────────────────────────────────────
     private fun setupDiagnostics() {
-        b.btnViewFullSerial.setOnClickListener {
+        // Tap anywhere on the card to open the full-screen view
+        b.cardSerial.setOnClickListener {
             findNavController().navigate(R.id.action_settings_to_full_serial)
         }
-        b.btnViewFullLogcat.setOnClickListener {
+        b.cardLogcat.setOnClickListener {
             findNavController().navigate(R.id.action_settings_to_full_logcat)
         }
         b.btnRefreshSerial.setOnClickListener {
@@ -223,7 +224,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                 launch {
                     vm.espLogs.collect { lines ->
                         if (lines.isEmpty()) {
-                            b.serialTerminalText.text = "— tap Refresh to fetch ESP log —"
+                            b.serialTerminalText.text = "— tap card to open full Serial Monitor —"
                         } else {
                             b.serialTerminalText.setText(
                                 buildMiniSerialSpan(lines),

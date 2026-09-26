@@ -535,8 +535,11 @@
 
             <!-- ── Serial Monitor card ──────────────────────────── -->
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardSerial"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:clickable="true"
+                android:focusable="true"
                 app:cardElevation="2dp"
                 app:cardCornerRadius="12dp"
                 android:layout_marginBottom="16dp">
@@ -563,16 +566,6 @@
                             android:textAppearance="?attr/textAppearanceTitleSmall" />
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnViewFullSerial"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:text="Full →"
-                            android:textSize="12sp"
-                            android:layout_marginEnd="6dp"
-                            app:cornerRadius="8dp"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-
-                        <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnRefreshSerial"
                             android:layout_width="wrap_content"
                             android:layout_height="36dp"
@@ -592,7 +585,7 @@
                             style="@style/Widget.Material3.Button.OutlinedButton" />
                     </LinearLayout>
 
-                    <!-- Terminal display -->
+                    <!-- Terminal display — tap card to open full view -->
                     <ScrollView
                         android:id="@+id/serialScrollView"
                         android:layout_width="match_parent"
@@ -604,19 +597,20 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:padding="10dp"
-                            android:text="— tap Refresh to fetch ESP log —"
+                            android:text="— tap card to open full Serial Monitor —"
                             android:fontFamily="monospace"
                             android:textSize="11sp"
                             android:textColor="@color/terminal_text"
                             android:background="@color/terminal_bg"
                             android:lineSpacingExtra="3dp"
-                            android:textIsSelectable="true" />
+                            android:textIsSelectable="false"
+                            android:clickable="false" />
                     </ScrollView>
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="ESP serial output via GET /api/logs (sender + receiver logs combined)."
+                        android:text="Tap card to open full view · Refresh fetches latest ESP log."
                         android:textAppearance="?attr/textAppearanceBodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:layout_marginTop="6dp" />
@@ -625,8 +619,11 @@
 
             <!-- ── App Logcat card ───────────────────────────────── -->
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardLogcat"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:clickable="true"
+                android:focusable="true"
                 app:cardElevation="2dp"
                 app:cardCornerRadius="12dp"
                 android:layout_marginBottom="32dp">
@@ -653,17 +650,6 @@
                             android:textAppearance="?attr/textAppearanceTitleSmall" />
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnViewFullLogcat"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:text="Full →"
-                            android:textSize="12sp"
-                            android:layout_marginEnd="6dp"
-                            app:cornerRadius="8dp"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-
-
-                        <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnExportLogcat"
                             android:layout_width="wrap_content"
                             android:layout_height="36dp"
@@ -683,7 +669,7 @@
                             style="@style/Widget.Material3.Button.OutlinedButton" />
                     </LinearLayout>
 
-                    <!-- Logcat display -->
+                    <!-- Logcat display — tap card to open full view -->
                     <ScrollView
                         android:id="@+id/logcatScrollView"
                         android:layout_width="match_parent"
@@ -701,13 +687,14 @@
                             android:textColor="@color/terminal_text"
                             android:background="@color/terminal_bg"
                             android:lineSpacingExtra="3dp"
-                            android:textIsSelectable="true" />
+                            android:textIsSelectable="false"
+                            android:clickable="false" />
                     </ScrollView>
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="App events: connection, commands, sensor state changes. Export shares as text."
+                        android:text="Tap card to open full view · Export shares log as text."
                         android:textAppearance="?attr/textAppearanceBodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:layout_marginTop="6dp" />
