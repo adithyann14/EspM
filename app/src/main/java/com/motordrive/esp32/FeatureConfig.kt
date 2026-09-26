@@ -7,23 +7,29 @@ package com.motordrive.esp32
  *
  *  MODULE A  ·  ENABLE_VOLTAGE_SENSORS
  *    Shows 3-phase voltages (R, Y, B) on the dashboard.
- *    Disable if voltage sensors are not physically fitted.
+ *    ⚠️  No ADC voltage-sensing code exists in the ESP8266 firmware.
+ *        Keys voltageR/Y/B are never emitted — cards always show "—".
+ *        Set to TRUE only after adding ADC hardware + firmware support.
  *
  *  MODULE B  ·  ENABLE_CURRENT_SENSOR
- *    Shows ACS712 current reading (A) and derives motor running
- *    state from current > threshold. Replaces vibration sensor.
- *    Disable if ACS712 is not fitted.
+ *    Shows ACS712 current reading (A) on the dashboard.
+ *    Firmware reads A0 on the receiver and forwards the value.
+ *    Set FALSE only if ACS712 hardware is not fitted.
  *
  *  MODULE C  ·  ENABLE_WATER_FLOW
- *    Shows a Water Flow card. Disable if sensor not connected.
+ *    Shows pipe-end water sensor card. Active-LOW, INPUT_PULLUP.
+ *    HIGH = no water (pin floating to VCC), LOW = water detected.
+ *    Set FALSE only if sensor is not wired.
  *
  *  MODULE D  ·  ENABLE_SERVER_MODE
- *    Adds "Server URL" field in Settings for global control.
+ *    Adds "Server URL" field in Settings → Connection.
+ *    Use when phone accesses ESP via LAN IP or port-forwarding.
+ *    (ESP does not make outbound calls — it is always the HTTP server.)
  * ════════════════════════════════════════════════════════════════
  */
 object FeatureConfig {
-    const val ENABLE_VOLTAGE_SENSORS = true    // MODULE A
-    const val ENABLE_CURRENT_SENSOR  = true    // MODULE B
-    const val ENABLE_WATER_FLOW      = true    // MODULE C
-    const val ENABLE_SERVER_MODE     = true    // MODULE D
+    const val ENABLE_VOLTAGE_SENSORS = false   // MODULE A — no firmware ADC support yet
+    const val ENABLE_CURRENT_SENSOR  = true    // MODULE B — ACS712 on A0, works
+    const val ENABLE_WATER_FLOW      = true    // MODULE C — active-LOW sensor
+    const val ENABLE_SERVER_MODE     = true    // MODULE D — custom base URL
 }

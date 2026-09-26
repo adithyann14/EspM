@@ -2,7 +2,11 @@
  * ════════════════════════════════════════════════════════════════════════
  *  SENDER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v3
  *
- *  Wi-Fi AP "MotorControl" / "motor1234" — app connects here (unchanged).
+ *  Wi-Fi AP "MotorControl" / "motor1234" — always up (ESP-NOW channel sync).
+ *  Wi-Fi STA — joins home router so the app works on home WiFi without
+ *              disconnecting from the router. Set creds at compile time
+ *              via STA_SSID_DEFAULT/STA_PASS_DEFAULT, or at runtime via
+ *              POST /api/wifi/config.
  *
  *  Comms: LoRa primary → ESP-NOW fallback (auto-switch after 10 s no RX)
  *         If ESP-NOW also fails 10 s → back to LoRa → repeat.
@@ -32,12 +36,15 @@
  *
  *  ── REST endpoints (all unchanged) ───────────────────────────────────
  *  GET  /api/status        → motorOn, current, waterOk, stall, linkOk,
- *                            commsMode (new: "LoRa" or "ESP-NOW")
+ *                            commsMode, staIp (null when STA not connected)
  *  POST /api/motor/on|off
  *  GET  /api/logs
  *  POST /api/timer/set|cancel  GET /api/timer/status
  *  POST /api/schedule/push|clear
  *  POST /api/time/sync
+ *  POST /api/config/drytimeout  {dryRunSec:5-60}
+ *  POST /api/wifi/config        {ssid,pass}  → save STA creds to EEPROM
+ *  GET  /api/wifi/status        → {staConnected,staIp,apIp,staSSID}
  * ════════════════════════════════════════════════════════════════════════
  */
 
@@ -72,8 +79,21 @@ static const char*   AP_SSID = "MotorControl";
 static const char*   AP_PASS = "motor1234";
 static const uint8_t WIFI_CH = 1;
 
+// ── Wi-Fi STA (home router) ───────────────────────────────────────────────
+// Compile-time defaults: define before #include or via -D flag in build.
+// Leave "" to rely only on EEPROM creds set via /api/wifi/config.
+#ifndef STA_SSID_DEFAULT
+  #define STA_SSID_DEFAULT ""   // e.g. "MyHomeWiFi"
+#endif
+#ifndef STA_PASS_DEFAULT
+  #define STA_PASS_DEFAULT ""   // e.g. "password123"
+#endif
+static char g_staSSID[33] = STA_SSID_DEFAULT;
+static char g_staPass[33] = STA_PASS_DEFAULT;
+static bool g_staConnected = false;
+
 // ── EEPROM ────────────────────────────────────────────────────────────────
-#define EE_SIZE          128
+#define EE_SIZE          200          // expanded: +72 bytes for STA creds
 #define EE_MAGIC         0
 #define EE_TIMER_TOTAL   1
 #define EE_TIMER_AUTO    5
@@ -84,6 +104,11 @@ static const uint8_t WIFI_CH = 1;
 #define EE_SCHED_COUNT   16
 #define EE_SCHED_BASE    17
 #define EE_MOTOR_WAS_ON  81
+// ── STA credential store ─────────────────────────────────────────────────
+#define EE_STA_MAGIC     82   // 0xCA = valid creds present
+#define EE_STA_SSID      83   // 33 bytes: 32 chars + NUL  (83-115)
+#define EE_STA_PASS     116   // 33 bytes: 32 chars + NUL  (116-148)
+#define EE_STA_MAGIC_VAL 0xCA
 #define EE_MAGIC_VAL     0xBE
 
 static inline void eeWriteU32(int addr, uint32_t v) {
@@ -161,6 +186,10 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
   uint8_t type; uint32_t epoch; uint8_t rtcEnabled;
 } TimeSyncPacket;                                   // 0x06
+
+typedef struct __attribute__((packed)) {
+  uint8_t type; uint32_t dryRunMs;
+} ConfigPacket;                                     // 0x07  dry-run timeout
 
 // ── Motor / sensor state ──────────────────────────────────────────────────
 static bool           g_motorOn  = false;
@@ -271,6 +300,30 @@ static void eeLoad() {
     sendTimerPacket();
   }
   if (motorWasOn && g_timerAutoRst) sendMotorCommandInternal(true);
+}
+
+// ── STA credential EEPROM helpers ────────────────────────────────────────
+
+static void eeSaveStaCreds() {
+  for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_SSID + i, (uint8_t)g_staSSID[i]);
+  for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_PASS + i, (uint8_t)g_staPass[i]);
+  EEPROM.write(EE_STA_MAGIC, EE_STA_MAGIC_VAL);
+  EEPROM.commit();
+  logFmt("[WIFI] STA creds saved  SSID='%s'", g_staSSID);
+}
+
+static void eeLoadStaCreds() {
+  if (EEPROM.read(EE_STA_MAGIC) != EE_STA_MAGIC_VAL) {
+    // No EEPROM creds — compile-time defaults already in g_staSSID/g_staPass
+    if (g_staSSID[0]) logFmt("[WIFI] compile-time STA SSID='%s'", g_staSSID);
+    else              logAdd("[WIFI] No STA creds — AP-only mode (192.168.4.1)");
+    return;
+  }
+  for (int i = 0; i < 33; i++) g_staSSID[i] = (char)EEPROM.read(EE_STA_SSID + i);
+  for (int i = 0; i < 33; i++) g_staPass[i] = (char)EEPROM.read(EE_STA_PASS + i);
+  g_staSSID[32] = '\0';
+  g_staPass[32] = '\0';
+  logFmt("[WIFI] EEPROM STA creds  SSID='%s'", g_staSSID);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -403,6 +456,13 @@ static void sendSchedPacket() {
   commsSend((uint8_t*)&p, sizeof(p));
 }
 
+static void sendConfigPacket(uint32_t dryRunMs) {
+  ConfigPacket p;
+  p.type = 0x07; p.dryRunMs = dryRunMs;
+  commsSend((uint8_t*)&p, sizeof(p));
+  logFmt("[SEND] dry-run timeout → %lums", (unsigned long)dryRunMs);
+}
+
 static void sendTimeSyncPacket() {
   TimeSyncPacket p;
   p.type = 0x06; p.epoch = currentEpoch(); p.rtcEnabled = g_rtcEnabled ? 1 : 0;
@@ -516,7 +576,11 @@ static String buildStatusJson() {
   j += "\"waterOk\":"    + String(g_waterOk  ? "true":"false") + ",";
   j += "\"stall\":"      + String(g_stall    ? "true":"false") + ",";
   j += "\"linkOk\":"     + String(isLinkOk() ? "true":"false") + ",";
-  j += "\"commsMode\":\"" + String(modeStr(g_txMode)) + "\"";  // new field
+  j += "\"commsMode\":\"" + String(modeStr(g_txMode)) + "\",";
+  if (g_staConnected && WiFi.status() == WL_CONNECTED)
+    j += "\"staIp\":\"" + WiFi.localIP().toString() + "\"";
+  else
+    j += "\"staIp\":null";
   j += "}";
   return j;
 }
@@ -528,6 +592,48 @@ void handleMotorOff()    { sendMotorCommandInternal(false); addCorsHeaders(); se
 void handleAlerts()      { addCorsHeaders(); server.send(200,"application/json","{\"alerts\":[]}"); }
 void handleAlertsClear() { addCorsHeaders(); server.send(200,"application/json","{\"success\":true}"); }
 void handleNotFound()    { server.send(404,"application/json","{\"error\":\"not found\"}"); }
+
+// ── /api/wifi/config — POST {"ssid":"…","pass":"…"} ──────────────────────
+void handleWifiConfig() {
+  addCorsHeaders();
+  String body = server.arg("plain");
+  // Extract first string value after a key in the JSON body
+  auto extractStr = [&](const char* key) -> String {
+    int ki = body.indexOf(key); if (ki < 0) return "";
+    int q1 = body.indexOf('"', ki + strlen(key));
+    if (q1 < 0) return "";
+    int q2 = body.indexOf('"', q1 + 1);
+    if (q2 < 0) return "";
+    return body.substring(q1 + 1, q2);
+  };
+  String ssid = extractStr("\"ssid\":");
+  String pass = extractStr("\"pass\":");
+  if (ssid.length() == 0 || ssid.length() > 32) {
+    server.send(400,"application/json","{\"error\":\"ssid must be 1-32 chars\"}"); return;
+  }
+  ssid.toCharArray(g_staSSID, sizeof(g_staSSID));
+  pass.toCharArray(g_staPass, sizeof(g_staPass));
+  eeSaveStaCreds();
+  // Connect immediately (non-blocking — result visible via /api/wifi/status)
+  WiFi.begin(g_staSSID, g_staPass);
+  logFmt("[WIFI] STA: connecting to '%s'…", g_staSSID);
+  addCorsHeaders();
+  server.send(200,"application/json","{\"success\":true,\"message\":\"Connecting — poll /api/wifi/status in 10s\"}");
+}
+
+// ── /api/wifi/status — GET ────────────────────────────────────────────────
+void handleWifiStatus() {
+  addCorsHeaders();
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  String apIp   = WiFi.softAPIP().toString();
+  String j = "{";
+  j += "\"staConnected\":" + String(connected ? "true":"false") + ",";
+  j += connected ? ("\"staIp\":\"" + WiFi.localIP().toString() + "\",") : "\"staIp\":null,";
+  j += "\"apIp\":\"" + apIp + "\",";
+  j += g_staSSID[0] ? ("\"staSSID\":\"" + String(g_staSSID) + "\"") : "\"staSSID\":null";
+  j += "}";
+  server.send(200,"application/json",j);
+}
 
 void handleLogs() {
   addCorsHeaders();
@@ -627,6 +733,22 @@ void handleTimeSync() {
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }
 
+void handleDryTimeout() {
+  // POST /api/config/drytimeout  body: {"dryRunSec":<int 5-60>}
+  // Forwards the app's dry-run slider to the receiver as a ConfigPacket (0x07).
+  String body   = server.arg("plain");
+  int    secIdx = body.indexOf("\"dryRunSec\":");
+  if (secIdx < 0) {
+    server.send(400,"application/json","{\"error\":\"missing dryRunSec\"}"); return;
+  }
+  int secs = body.substring(secIdx + 12).toInt();
+  secs = max(5, min(60, secs));
+  sendConfigPacket((uint32_t)secs * 1000UL);
+  addCorsHeaders();
+  server.send(200,"application/json",
+    "{\"success\":true,\"dryRunSec\":" + String(secs) + "}");
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 //  Setup
 // ══════════════════════════════════════════════════════════════════════════
@@ -645,13 +767,28 @@ void setup() {
   EEPROM.begin(EE_SIZE);
   // eeLoad() called later after comms init so auto-restart can send packets
 
-  // ── Wi-Fi AP (must come before ESP-NOW and LoRa) ──────────────────────
+  // ── Wi-Fi AP+STA — AP always up for ESP-NOW; STA for home network ───────
   WiFi.persistent(false);
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);              // AP = ESP-NOW channel; STA = home net
   WiFi.softAP(AP_SSID, AP_PASS, WIFI_CH);
   WiFi.setOutputPower(20.5f);
   wifi_set_phy_mode(PHY_MODE_11B);
   logFmt("[SEND] AP  IP=%s  SSID=%s", WiFi.softAPIP().toString().c_str(), AP_SSID);
+
+  // ── Try STA — attempt home WiFi connect (8 s timeout) ────────────────
+  eeLoadStaCreds();                    // reads EEPROM creds into g_staSSID/g_staPass
+  if (g_staSSID[0] != '\0') {
+    logFmt("[WIFI] STA connecting to '%s'…", g_staSSID);
+    WiFi.begin(g_staSSID, g_staPass);
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - t0) < 8000UL) delay(200);
+    if (WiFi.status() == WL_CONNECTED) {
+      g_staConnected = true;
+      logFmt("[WIFI] STA connected  IP=%s  (app can use this IP)", WiFi.localIP().toString().c_str());
+    } else {
+      logFmt("[WIFI] STA '%s' not reachable — AP-only (192.168.4.1)", g_staSSID);
+    }
+  }
 
   // ── LoRa init ──────────────────────────────────────────────────────────
   // SPI.begin() is called internally by LoRa.begin(); uses D5/D6/D7 by default
@@ -696,7 +833,10 @@ void setup() {
   server.on("/api/timer/status",   HTTP_GET,  handleTimerStatus);
   server.on("/api/schedule/push",  HTTP_POST, handleSchedPush);
   server.on("/api/schedule/clear", HTTP_POST, handleSchedClear);
-  server.on("/api/time/sync",      HTTP_POST, handleTimeSync);
+  server.on("/api/time/sync",         HTTP_POST, handleTimeSync);
+  server.on("/api/config/drytimeout", HTTP_POST, handleDryTimeout);
+  server.on("/api/wifi/config",       HTTP_POST, handleWifiConfig);
+  server.on("/api/wifi/status",       HTTP_GET,  handleWifiStatus);
   auto opt = [](){ server.sendHeader("Access-Control-Allow-Origin","*");
                    server.sendHeader("Access-Control-Allow-Methods","GET,POST,OPTIONS");
                    server.sendHeader("Access-Control-Allow-Headers","Content-Type");
@@ -707,7 +847,9 @@ void setup() {
   server.on("/api/timer/cancel",   HTTP_OPTIONS, opt);
   server.on("/api/schedule/push",  HTTP_OPTIONS, opt);
   server.on("/api/schedule/clear", HTTP_OPTIONS, opt);
-  server.on("/api/time/sync",      HTTP_OPTIONS, opt);
+  server.on("/api/time/sync",         HTTP_OPTIONS, opt);
+  server.on("/api/config/drytimeout", HTTP_OPTIONS, opt);
+  server.on("/api/wifi/config",       HTTP_OPTIONS, opt);
   server.onNotFound(handleNotFound);
   server.begin();
 
@@ -729,6 +871,7 @@ void setup() {
 void loop() {
   server.handleClient();
   unsigned long now = millis();
+  g_staConnected = (WiFi.status() == WL_CONNECTED);  // track STA state each loop
 
   // ── LoRa poll: check for packets from receiver ────────────────────────
   loraPoll();

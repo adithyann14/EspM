@@ -20,6 +20,7 @@
  *
  *  SyncWord must match sender (0xAB). Frequency must match (433 MHz).
  *
+ *  0x07 ConfigPacket  Sender→Receiver  (dry-run timeout from app slider)
  *  ── Water sensor fixes (v3) ──────────────────────────────────────────
  *  • PIN_WATER now INPUT_PULLUP — fixes floating-pin false reads
  *  • Logic: HIGH = no water (sensor open), LOW = water present
@@ -122,6 +123,10 @@ typedef struct __attribute__((packed)) {
 } TimeSyncPacket;                                   // 0x06
 
 typedef struct __attribute__((packed)) {
+  uint8_t type; uint32_t dryRunMs;
+} ConfigPacket;                                     // 0x07  dry-run timeout
+
+typedef struct __attribute__((packed)) {
   uint8_t type; char msg[59];
 } LogPacket;                                        // 0x03  Receiver→Sender
 
@@ -161,8 +166,10 @@ static const float CURRENT_RUN_THRESH = 0.10f;
 #define SERVO_BACK_MS 400UL
 
 // ── Timing constants ──────────────────────────────────────────────────────
-#define WATER_TIMEOUT_MS        10000UL  // ← was 30 s; now 10 s (dry-run guard)
+#define WATER_TIMEOUT_DEFAULT_MS 10000UL // default 10 s dry-run guard (was 30 s)
 #define WATER_LOST_DEBOUNCE_MS   2000UL  // sustained dry for 2 s triggers cut-off
+// Runtime dry-run timeout — updated via ConfigPacket (0x07) from app slider
+static uint32_t g_dryRunMs = WATER_TIMEOUT_DEFAULT_MS;
 #define STALL_TIMEOUT_MS         5000UL
 #define STATUS_INTERVAL_MS       1000UL
 #define TIMER_SAVE_MS           10000UL
@@ -447,7 +454,7 @@ static void handleWaterSensor(unsigned long now) {
       return;
     }
     // Dry for too long → cut off (10 s)
-    if (now - g_waterCheckStart >= WATER_TIMEOUT_MS) {
+    if (now - g_waterCheckStart >= g_dryRunMs) {
       sendLogToSender("[RECV] ✗ WATER TIMEOUT 10s — auto cut-off");
       g_waterCheckActive = false;
       if (servoState == ServoState::IDLE) deactivateMotor();
@@ -612,6 +619,16 @@ static void processPacket(uint8_t* data, uint8_t len, CommsMode src) {
       TimeSyncPacket pkt; memcpy(&pkt, data, sizeof(pkt));
       g_epoch = pkt.epoch; g_epochMs = millis();
       g_rtcEnabled = (pkt.rtcEnabled != 0);
+      break;
+    }
+    case 0x07: {
+      // ConfigPacket — dry-run timeout update from app slider via sender
+      if (len < sizeof(ConfigPacket)) return;
+      ConfigPacket pkt; memcpy(&pkt, data, sizeof(pkt));
+      if (pkt.dryRunMs >= 5000UL && pkt.dryRunMs <= 60000UL) {
+        g_dryRunMs = pkt.dryRunMs;
+        sendLogFmt("[RECV] dry-run timeout updated → %lus", (unsigned long)(g_dryRunMs / 1000UL));
+      }
       break;
     }
     default: break;

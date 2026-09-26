@@ -82,10 +82,34 @@ class Esp32Repository(private val config: ConnectionConfig) {
      */
     suspend fun setDryRunTimeout(seconds: Int): Result<Unit> = io {
         val body = """{"dryRunSec":$seconds}"""
-        try {
-            httpPostJson("${config.baseUrl}/api/config/drytimeout", body)
-        } catch (_: IOException) { /* older firmware — skip silently */ }
+        httpPostJson("${config.baseUrl}/api/config/drytimeout", body)
         Unit
+    }
+
+    // ── Wi-Fi STA config ───────────────────────────────────────────────────────────
+    /** Push home Wi-Fi credentials to the ESP8266 so it can join the LAN. */
+    suspend fun configureWifi(ssid: String, pass: String): Result<Unit> = io {
+        val body = """{"ssid":"$ssid","pass":"$pass"}"""
+        httpPostJson("${config.baseUrl}/api/wifi/config", body)
+        Unit
+    }
+
+    data class WifiStatus(
+        val staConnected: Boolean,
+        val staIp:        String?,
+        val apIp:         String,
+        val staSSID:      String?
+    )
+
+    /** Read the ESP’s current Wi-Fi state (AP always up, STA when joined). */
+    suspend fun getWifiStatus(): Result<WifiStatus> = io {
+        val o = JSONObject(httpGet("${config.baseUrl}/api/wifi/status"))
+        WifiStatus(
+            staConnected = o.optBoolean("staConnected", false),
+            staIp        = o.optString("staIp").takeIf  { it.isNotEmpty() && it != "null" },
+            apIp         = o.optString("apIp", "192.168.4.1"),
+            staSSID      = o.optString("staSSID").takeIf { it.isNotEmpty() && it != "null" }
+        )
     }
 
     // ── OTA ───────────────────────────────────────────────────────────────
@@ -158,6 +182,8 @@ class Esp32Repository(private val config: ConnectionConfig) {
             waterOk       = o.boolOrNull("waterOk"),
             stall         = o.optBoolean("stall",  false),
             linkOk        = o.optBoolean("linkOk", false),
+            commsMode     = o.optString("commsMode").takeIf { it.isNotEmpty() },
+            staIp         = o.optString("staIp").takeIf { it.isNotEmpty() && it != "null" },
             isConnected   = true,
             lastUpdatedMs = System.currentTimeMillis(),
             errorMessage  = null

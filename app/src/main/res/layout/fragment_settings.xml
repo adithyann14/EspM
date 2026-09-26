@@ -31,47 +31,214 @@
             android:padding="16dp">
 
             <!-- ══════════════════════════════════════════════════════════ -->
-            <!-- SECTION: SENSORS                                          -->
-            <!-- Includes RTC (moved from Schedule), dry-run timeout,      -->
-            <!-- and module display toggles.                               -->
+            <!-- SECTION: SENSORS (collapsible)                            -->
             <!-- ══════════════════════════════════════════════════════════ -->
-            <TextView
+
+            <!-- Section header — clickable, expands/collapses content -->
+            <LinearLayout
+                android:id="@+id/headerSensors"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="🔬  SENSORS"
-                android:textAppearance="?attr/textAppearanceLabelSmall"
-                android:textColor="?attr/colorPrimary"
-                android:letterSpacing="0.08"
-                android:layout_marginBottom="8dp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackground"
+                android:paddingVertical="6dp"
+                android:layout_marginBottom="4dp">
 
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/sensorDisplaySection"
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🔬  SENSORS"
+                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                    android:textColor="?attr/colorPrimary"
+                    android:letterSpacing="0.08" />
+
+                <ImageView
+                    android:id="@+id/chevronSensors"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_expand_more"
+                    android:tint="?attr/colorPrimary"
+                    android:contentDescription="expand sensors section" />
+            </LinearLayout>
+
+            <!-- Sensors content wrapper -->
+            <LinearLayout
+                android:id="@+id/contentSensors"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:cardElevation="0dp"
-                app:cardCornerRadius="12dp"
-                app:strokeColor="?attr/colorOutlineVariant"
-                app:strokeWidth="1dp"
-                android:layout_marginBottom="24dp">
+                android:orientation="vertical"
+                android:visibility="visible">
 
-                <LinearLayout
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/sensorDisplaySection"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="4dp">
+                    app:cardElevation="0dp"
+                    app:cardCornerRadius="12dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp"
+                    android:layout_marginBottom="20dp">
 
-                    <!-- ── RTC row ──────────────────────────────────────── -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:padding="12dp">
+                        android:padding="4dp">
 
+                        <!-- ── RTC row ──────────────────────────────────── -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="12dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical">
+
+                                <LinearLayout
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:orientation="vertical">
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="Use hardware RTC (DS3231)"
+                                        android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                                    <TextView
+                                        android:id="@+id/tvRtcHint"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="No RTC — app syncs phone time to ESP every 30 s"
+                                        android:textAppearance="?attr/textAppearanceBodySmall"
+                                        android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+
+                                <com.google.android.material.materialswitch.MaterialSwitch
+                                    android:id="@+id/switchRtcEnabled"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvPhoneTime"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Phone time: —"
+                                android:textAppearance="?attr/textAppearanceLabelSmall"
+                                android:textColor="?attr/colorOutline"
+                                android:layout_marginTop="4dp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.divider.MaterialDivider
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginHorizontal="12dp" />
+
+                        <!-- ── Dry-run timeout ───────────────────────────── -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="12dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical"
+                                android:layout_marginBottom="4dp">
+
+                                <LinearLayout
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:orientation="vertical">
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="Dry-run cutoff"
+                                        android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                                    <TextView
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="wrap_content"
+                                        android:text="Seconds before motor stops when no water detected"
+                                        android:textAppearance="?attr/textAppearanceBodySmall"
+                                        android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+
+                                <TextView
+                                    android:id="@+id/tvDryRunValue"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="10 s"
+                                    android:textAppearance="?attr/textAppearanceTitleMedium"
+                                    android:textColor="?attr/colorPrimary"
+                                    android:minWidth="44dp"
+                                    android:gravity="end"
+                                    android:fontFamily="monospace" />
+                            </LinearLayout>
+
+                            <com.google.android.material.slider.Slider
+                                android:id="@+id/sliderDryRun"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:valueFrom="5"
+                                android:valueTo="60"
+                                android:stepSize="5"
+                                android:value="10"
+                                app:labelBehavior="gone" />
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="5 s"
+                                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                                    android:textColor="?attr/colorOutline" />
+
+                                <View android:layout_width="0dp" android:layout_height="0dp" android:layout_weight="1" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="60 s"
+                                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                                    android:textColor="?attr/colorOutline" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <!-- ── Sensor module display toggles ──────────────── -->
+                        <com.google.android.material.divider.MaterialDivider
+                            android:id="@+id/dividerSensorModules"
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginHorizontal="12dp" />
+
+                        <!-- MODULE A — Voltage -->
+                        <LinearLayout
+                            android:id="@+id/sensorVoltageRow"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
                             android:orientation="horizontal"
-                            android:gravity="center_vertical">
+                            android:gravity="center_vertical"
+                            android:paddingHorizontal="12dp"
+                            android:paddingVertical="10dp">
 
                             <LinearLayout
                                 android:layout_width="0dp"
@@ -82,52 +249,39 @@
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="Use hardware RTC (DS3231)"
+                                    android:text="Phase Voltages"
                                     android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                                 <TextView
-                                    android:id="@+id/tvRtcHint"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="No RTC — app syncs phone time to ESP every 30 s"
+                                    android:text="3-phase voltage readings (R / Y / B)"
                                     android:textAppearance="?attr/textAppearanceBodySmall"
                                     android:textColor="?attr/colorOnSurfaceVariant" />
                             </LinearLayout>
 
                             <com.google.android.material.materialswitch.MaterialSwitch
-                                android:id="@+id/switchRtcEnabled"
+                                android:id="@+id/switchShowVoltage"
                                 android:layout_width="wrap_content"
-                                android:layout_height="wrap_content" />
+                                android:layout_height="wrap_content"
+                                android:checked="true" />
                         </LinearLayout>
 
-                        <TextView
-                            android:id="@+id/tvPhoneTime"
+                        <com.google.android.material.divider.MaterialDivider
+                            android:id="@+id/dividerVoltageCurrent"
                             android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="Phone time: —"
-                            android:textAppearance="?attr/textAppearanceLabelSmall"
-                            android:textColor="?attr/colorOutline"
-                            android:layout_marginTop="4dp" />
-                    </LinearLayout>
+                            android:layout_height="1dp"
+                            android:layout_marginHorizontal="12dp" />
 
-                    <com.google.android.material.divider.MaterialDivider
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginHorizontal="12dp" />
-
-                    <!-- ── Dry-run timeout ───────────────────────────────── -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:padding="12dp">
-
+                        <!-- MODULE B — Current -->
                         <LinearLayout
+                            android:id="@+id/sensorCurrentRow"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="horizontal"
                             android:gravity="center_vertical"
-                            android:layout_marginBottom="4dp">
+                            android:paddingHorizontal="12dp"
+                            android:paddingVertical="10dp">
 
                             <LinearLayout
                                 android:layout_width="0dp"
@@ -138,755 +292,842 @@
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="Dry-run cutoff"
+                                    android:text="Current of R Phase"
                                     android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="Seconds before motor stops when no water detected"
+                                    android:text="ACS712 reading (A) — I > 0.1 A = running"
                                     android:textAppearance="?attr/textAppearanceBodySmall"
                                     android:textColor="?attr/colorOnSurfaceVariant" />
                             </LinearLayout>
 
-                            <TextView
-                                android:id="@+id/tvDryRunValue"
+                            <com.google.android.material.materialswitch.MaterialSwitch
+                                android:id="@+id/switchShowCurrent"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="10 s"
-                                android:textAppearance="?attr/textAppearanceTitleMedium"
-                                android:textColor="?attr/colorPrimary"
-                                android:minWidth="44dp"
-                                android:gravity="end"
-                                android:fontFamily="monospace" />
+                                android:checked="true" />
                         </LinearLayout>
 
-                        <com.google.android.material.slider.Slider
-                            android:id="@+id/sliderDryRun"
+                        <com.google.android.material.divider.MaterialDivider
+                            android:id="@+id/dividerCurrentWater"
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginHorizontal="12dp" />
+
+                        <!-- MODULE C — Water sensor -->
+                        <LinearLayout
+                            android:id="@+id/sensorWaterRow"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:valueFrom="5"
-                            android:valueTo="60"
-                            android:stepSize="5"
-                            android:value="10"
-                            app:labelBehavior="gone" />
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingHorizontal="12dp"
+                            android:paddingVertical="10dp">
 
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
 
-                            <TextView
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Water at Pipe End"
+                                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Active-LOW sensor (INPUT_PULLUP): LOW = water ✔, HIGH = dry"
+                                    android:textAppearance="?attr/textAppearanceBodySmall"
+                                    android:textColor="?attr/colorOnSurfaceVariant" />
+                            </LinearLayout>
+
+                            <com.google.android.material.materialswitch.MaterialSwitch
+                                android:id="@+id/switchShowWater"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="5 s"
-                                android:textAppearance="?attr/textAppearanceLabelSmall"
-                                android:textColor="?attr/colorOutline" />
-
-                            <View android:layout_width="0dp" android:layout_height="0dp" android:layout_weight="1" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="60 s"
-                                android:textAppearance="?attr/textAppearanceLabelSmall"
-                                android:textColor="?attr/colorOutline" />
-                        </LinearLayout>
-                    </LinearLayout>
-
-                    <!-- ── Sensor module display toggles ─────────────────── -->
-                    <com.google.android.material.divider.MaterialDivider
-                        android:id="@+id/dividerSensorModules"
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginHorizontal="12dp" />
-
-                    <!-- MODULE A — Voltage -->
-                    <LinearLayout
-                        android:id="@+id/sensorVoltageRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingHorizontal="12dp"
-                        android:paddingVertical="10dp">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Phase Voltages"
-                                android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="3-phase voltage readings (R / Y / B)"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant" />
+                                android:checked="true" />
                         </LinearLayout>
 
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchShowVoltage"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="true" />
                     </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
 
-                    <com.google.android.material.divider.MaterialDivider
-                        android:id="@+id/dividerVoltageCurrent"
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginHorizontal="12dp" />
-
-                    <!-- MODULE B — Current -->
-                    <LinearLayout
-                        android:id="@+id/sensorCurrentRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingHorizontal="12dp"
-                        android:paddingVertical="10dp">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Current of R Phase"
-                                android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="ACS712 reading (A) — I > 0.1 A = running"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant" />
-                        </LinearLayout>
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchShowCurrent"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="true" />
-                    </LinearLayout>
-
-                    <com.google.android.material.divider.MaterialDivider
-                        android:id="@+id/dividerCurrentWater"
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginHorizontal="12dp" />
-
-                    <!-- MODULE C — Water sensor -->
-                    <LinearLayout
-                        android:id="@+id/sensorWaterRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingHorizontal="12dp"
-                        android:paddingVertical="10dp">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Water at Pipe End"
-                                android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Active-LOW sensor — auto cut-off at dry-run timeout"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant" />
-                        </LinearLayout>
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchShowWater"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="true" />
-                    </LinearLayout>
-
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
+            </LinearLayout>
+            <!-- /contentSensors -->
 
             <!-- ══════════════════════════════════════════════════════════ -->
-            <!-- SECTION: CONNECTION                                       -->
+            <!-- SECTION: CONNECTION (collapsible)                         -->
             <!-- ══════════════════════════════════════════════════════════ -->
-            <TextView
+
+            <LinearLayout
+                android:id="@+id/headerConnection"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="📡  CONNECTION"
-                android:textAppearance="?attr/textAppearanceLabelSmall"
-                android:textColor="?attr/colorPrimary"
-                android:letterSpacing="0.08"
-                android:layout_marginBottom="8dp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackground"
+                android:paddingVertical="6dp"
+                android:layout_marginBottom="4dp">
 
-            <com.google.android.material.card.MaterialCardView
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="📡  CONNECTION"
+                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                    android:textColor="?attr/colorPrimary"
+                    android:letterSpacing="0.08" />
+
+                <ImageView
+                    android:id="@+id/chevronConnection"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_expand_more"
+                    android:tint="?attr/colorPrimary"
+                    android:contentDescription="expand connection section" />
+            </LinearLayout>
+
+            <!-- Connection content wrapper -->
+            <LinearLayout
+                android:id="@+id/contentConnection"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:cardElevation="0dp"
-                app:cardCornerRadius="12dp"
-                app:strokeColor="?attr/colorOutlineVariant"
-                app:strokeWidth="1dp"
-                android:layout_marginBottom="16dp">
+                android:orientation="vertical"
+                android:visibility="visible">
 
-                <LinearLayout
+                <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="12dp">
+                    app:cardElevation="0dp"
+                    app:cardCornerRadius="12dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp"
+                    android:layout_marginBottom="12dp">
 
-                    <!-- Mode toggle -->
-                    <com.google.android.material.button.MaterialButtonToggleGroup
-                        android:id="@+id/toggleConnectionMode"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="14dp"
-                        app:singleSelection="true"
-                        app:selectionRequired="true">
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnDirectWifi"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="📶  Direct Wi-Fi"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnServerMode"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="☁  Server"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-                    </com.google.android.material.button.MaterialButtonToggleGroup>
-
-                    <!-- Direct Wi-Fi fields -->
                     <LinearLayout
-                        android:id="@+id/directWifiSection"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical">
-
-                        <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/ipLayout"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="ESP IP or Hostname"
-                            android:layout_marginBottom="10dp"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/editIp"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:inputType="textNoSuggestions"
-                                android:fontFamily="monospace" />
-                        </com.google.android.material.textfield.TextInputLayout>
-
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal">
-
-                            <com.google.android.material.textfield.TextInputLayout
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:hint="Port"
-                                android:layout_marginEnd="8dp"
-                                android:layout_marginBottom="10dp"
-                                style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
-                                <com.google.android.material.textfield.TextInputEditText
-                                    android:id="@+id/editPort"
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:inputType="number"
-                                    android:fontFamily="monospace" />
-                            </com.google.android.material.textfield.TextInputLayout>
-
-                            <com.google.android.material.textfield.TextInputLayout
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:hint="Poll interval (s)"
-                                android:layout_marginBottom="10dp"
-                                style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
-                                <com.google.android.material.textfield.TextInputEditText
-                                    android:id="@+id/editPollInterval"
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:inputType="number"
-                                    android:fontFamily="monospace" />
-                            </com.google.android.material.textfield.TextInputLayout>
-                        </LinearLayout>
-                    </LinearLayout>
-
-                    <!-- Server URL field -->
-                    <LinearLayout
-                        android:id="@+id/serverSection"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:visibility="gone">
+                        android:padding="12dp">
 
-                        <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/serverUrlLayout"
+                        <!-- Mode toggle -->
+                        <com.google.android.material.button.MaterialButtonToggleGroup
+                            android:id="@+id/toggleConnectionMode"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:hint="Server URL  (https://…)"
-                            android:layout_marginBottom="10dp"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/editServerUrl"
+                            android:layout_marginBottom="14dp"
+                            app:singleSelection="true"
+                            app:selectionRequired="true">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnDirectWifi"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="📶  Direct Wi-Fi"
+                                style="@style/Widget.Material3.Button.OutlinedButton" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnServerMode"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="☁  Server"
+                                style="@style/Widget.Material3.Button.OutlinedButton" />
+                        </com.google.android.material.button.MaterialButtonToggleGroup>
+
+                        <!-- Direct Wi-Fi fields -->
+                        <LinearLayout
+                            android:id="@+id/directWifiSection"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical">
+
+                            <com.google.android.material.textfield.TextInputLayout
+                                android:id="@+id/ipLayout"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:inputType="textUri"
+                                android:hint="ESP IP or Hostname"
+                                android:layout_marginBottom="10dp"
+                                style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                                <com.google.android.material.textfield.TextInputEditText
+                                    android:id="@+id/editIp"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:inputType="textNoSuggestions"
+                                    android:fontFamily="monospace" />
+                            </com.google.android.material.textfield.TextInputLayout>
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal">
+
+                                <com.google.android.material.textfield.TextInputLayout
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:hint="Port"
+                                    android:layout_marginEnd="8dp"
+                                    android:layout_marginBottom="10dp"
+                                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                                    <com.google.android.material.textfield.TextInputEditText
+                                        android:id="@+id/editPort"
+                                        android:layout_width="match_parent"
+                                        android:layout_height="wrap_content"
+                                        android:inputType="number"
+                                        android:fontFamily="monospace" />
+                                </com.google.android.material.textfield.TextInputLayout>
+
+                                <com.google.android.material.textfield.TextInputLayout
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:hint="Poll interval (s)"
+                                    android:layout_marginBottom="10dp"
+                                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                                    <com.google.android.material.textfield.TextInputEditText
+                                        android:id="@+id/editPollInterval"
+                                        android:layout_width="match_parent"
+                                        android:layout_height="wrap_content"
+                                        android:inputType="number"
+                                        android:fontFamily="monospace" />
+                                </com.google.android.material.textfield.TextInputLayout>
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <!-- Server URL field -->
+                        <LinearLayout
+                            android:id="@+id/serverSection"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <com.google.android.material.textfield.TextInputLayout
+                                android:id="@+id/serverUrlLayout"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="Server URL  (https://…)"
+                                android:layout_marginBottom="10dp"
+                                style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                                <com.google.android.material.textfield.TextInputEditText
+                                    android:id="@+id/editServerUrl"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:inputType="textUri"
+                                    android:fontFamily="monospace" />
+                            </com.google.android.material.textfield.TextInputLayout>
+                        </LinearLayout>
+
+                        <!-- ── Home Wi-Fi (STA) config ───────────────────── -->
+                        <com.google.android.material.divider.MaterialDivider
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginHorizontal="0dp"
+                            android:layout_marginBottom="12dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Join Home Wi-Fi (optional)"
+                            android:textAppearance="?attr/textAppearanceTitleSmall"
+                            android:layout_marginBottom="4dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Put the ESP on your home network so the app works from any phone on the same Wi-Fi — no need to switch to the ESP's AP."
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:layout_marginBottom="10dp" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/layoutStaSsid"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:hint="Home Wi-Fi SSID"
+                            android:layout_marginBottom="8dp"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/editStaSsid"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="text"
+                                android:maxLength="32"
                                 android:fontFamily="monospace" />
                         </com.google.android.material.textfield.TextInputLayout>
-                    </LinearLayout>
 
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-
-            <!-- Save & Connect — applies Connection + dry-run settings -->
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnSave"
-                android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:text="Save &amp; Connect"
-                android:layout_marginBottom="28dp"
-                app:cornerRadius="12dp"
-                style="@style/Widget.Material3.Button" />
-
-            <!-- ══════════════════════════════════════════════════════════ -->
-            <!-- SECTION: OTA FIRMWARE UPDATE                              -->
-            <!-- ══════════════════════════════════════════════════════════ -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="⬆️  OTA FIRMWARE UPDATE"
-                android:textAppearance="?attr/textAppearanceLabelSmall"
-                android:textColor="?attr/colorPrimary"
-                android:letterSpacing="0.08"
-                android:layout_marginBottom="8dp" />
-
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                app:cardElevation="0dp"
-                app:cardCornerRadius="12dp"
-                app:strokeColor="?attr/colorOutlineVariant"
-                app:strokeWidth="1dp"
-                android:layout_marginBottom="24dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="12dp">
-
-                    <!-- Target toggle -->
-                    <com.google.android.material.button.MaterialButtonToggleGroup
-                        android:id="@+id/toggleOtaTarget"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="12dp"
-                        app:singleSelection="true"
-                        app:selectionRequired="true">
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnOtaSender"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="📡  Sender"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnOtaReceiver"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="🔌  Receiver"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-                    </com.google.android.material.button.MaterialButtonToggleGroup>
-
-                    <!-- OTA Password -->
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:hint="OTA Password"
-                        android:layout_marginBottom="10dp"
-                        app:endIconMode="password_toggle"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/editOtaPass"
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/layoutStaPass"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:inputType="textPassword"
-                            android:fontFamily="monospace" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                            android:hint="Home Wi-Fi Password"
+                            android:layout_marginBottom="10dp"
+                            app:endIconMode="password_toggle"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/editStaPass"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="textPassword"
+                                android:maxLength="64"
+                                android:fontFamily="monospace" />
+                        </com.google.android.material.textfield.TextInputLayout>
 
-                    <!-- Enable button -->
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnEnableOta"
-                        android:layout_width="match_parent"
-                        android:layout_height="52dp"
-                        android:text="ENABLE OTA →"
-                        android:layout_marginBottom="10dp"
-                        app:cornerRadius="12dp"
-                        style="@style/Widget.Material3.Button.TonalButton" />
-
-                    <!-- Info / instructions panel -->
-                    <com.google.android.material.card.MaterialCardView
-                        android:id="@+id/otaInfoCard"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:visibility="gone"
-                        app:cardElevation="0dp"
-                        app:cardCornerRadius="10dp"
-                        app:strokeColor="?attr/colorOutlineVariant"
-                        app:strokeWidth="1dp"
-                        android:layout_marginBottom="8dp">
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnSaveWifi"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:text="Send to ESP &amp; Join"
+                            android:layout_marginBottom="8dp"
+                            app:cornerRadius="10dp"
+                            style="@style/Widget.Material3.Button.OutlinedButton" />
 
                         <TextView
-                            android:id="@+id/tvOtaInfo"
+                            android:id="@+id/tvWifiStatus"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:padding="14dp"
-                            android:text=""
-                            android:fontFamily="monospace"
-                            android:textSize="12sp"
-                            android:textColor="?attr/colorOnSurface" />
-                    </com.google.android.material.card.MaterialCardView>
+                            android:text="STA: not configured"
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:layout_marginBottom="4dp" />
 
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="CRC-verified before applying. Power loss during flash keeps old firmware intact."
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorOnSurfaceVariant" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
 
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-
-            <!-- ══════════════════════════════════════════════════════════ -->
-            <!-- SECTION: NOTIFICATIONS                                    -->
-            <!-- ══════════════════════════════════════════════════════════ -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="🔔  NOTIFICATIONS"
-                android:textAppearance="?attr/textAppearanceLabelSmall"
-                android:textColor="?attr/colorPrimary"
-                android:letterSpacing="0.08"
-                android:layout_marginBottom="8dp" />
-
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/notifSection"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                app:cardElevation="0dp"
-                app:cardCornerRadius="12dp"
-                app:strokeColor="?attr/colorOutlineVariant"
-                app:strokeWidth="1dp"
-                android:layout_marginBottom="24dp">
-
-                <LinearLayout
+                <!-- Save & Connect button (part of Connection section) -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSave"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="4dp">
+                    android:layout_height="56dp"
+                    android:text="Save &amp; Connect"
+                    android:layout_marginBottom="20dp"
+                    app:cornerRadius="12dp"
+                    style="@style/Widget.Material3.Button" />
 
-                    <!-- Persistent ongoing notification -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingHorizontal="12dp"
-                        android:paddingVertical="10dp">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Persistent status notification"
-                                android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Always-on shade indicator — updates every 2 s"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant" />
-                        </LinearLayout>
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchPersistentNotif"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="true" />
-                    </LinearLayout>
-
-                    <com.google.android.material.divider.MaterialDivider
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginHorizontal="12dp" />
-
-                    <!-- Alert sound on state change -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingHorizontal="12dp"
-                        android:paddingVertical="10dp">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Alert on state change"
-                                android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Sound + vibration when motor turns ON or OFF"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant" />
-                        </LinearLayout>
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/switchAlertNotif"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:checked="true" />
-                    </LinearLayout>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Notification sound can be changed in system Settings → Apps → MotorDrive → Notifications."
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:paddingHorizontal="12dp"
-                        android:paddingBottom="10dp" />
-
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
+            </LinearLayout>
+            <!-- /contentConnection -->
 
             <!-- ══════════════════════════════════════════════════════════ -->
-            <!-- SECTION: DIAGNOSTICS                                      -->
+            <!-- SECTION: OTA FIRMWARE UPDATE (collapsible, default closed)-->
             <!-- ══════════════════════════════════════════════════════════ -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="🔍  DIAGNOSTICS"
-                android:textAppearance="?attr/textAppearanceLabelSmall"
-                android:textColor="?attr/colorPrimary"
-                android:letterSpacing="0.08"
-                android:layout_marginBottom="8dp" />
 
-            <!-- Serial Monitor card -->
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/cardSerial"
+            <LinearLayout
+                android:id="@+id/headerOta"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
                 android:clickable="true"
                 android:focusable="true"
-                app:cardElevation="0dp"
-                app:cardCornerRadius="12dp"
-                app:strokeColor="?attr/colorOutlineVariant"
-                app:strokeWidth="1dp"
-                android:layout_marginBottom="12dp">
+                android:background="?attr/selectableItemBackground"
+                android:paddingVertical="6dp"
+                android:layout_marginBottom="4dp">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
+                <TextView
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="12dp">
+                    android:layout_weight="1"
+                    android:text="⬆️  OTA FIRMWARE UPDATE"
+                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                    android:textColor="?attr/colorPrimary"
+                    android:letterSpacing="0.08" />
 
-                    <!-- Header row -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:layout_marginBottom="8dp">
+                <ImageView
+                    android:id="@+id/chevronOta"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_expand_more"
+                    android:tint="?attr/colorPrimary"
+                    android:rotation="-90"
+                    android:contentDescription="expand OTA section" />
+            </LinearLayout>
 
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="📟  Serial Monitor"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnRefreshSerial"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:text="Refresh"
-                            android:textSize="12sp"
-                            android:layout_marginEnd="6dp"
-                            app:cornerRadius="8dp"
-                            style="@style/Widget.Material3.Button.TonalButton" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnClearSerial"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:text="Clear"
-                            android:textSize="12sp"
-                            app:cornerRadius="8dp"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-                    </LinearLayout>
-
-                    <ScrollView
-                        android:id="@+id/serialScrollView"
-                        android:layout_width="match_parent"
-                        android:layout_height="200dp"
-                        android:fillViewport="true">
-
-                        <TextView
-                            android:id="@+id/serialTerminalText"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:padding="10dp"
-                            android:text="— tap card to open full Serial Monitor —"
-                            android:fontFamily="monospace"
-                            android:textSize="11sp"
-                            android:textColor="@color/terminal_text"
-                            android:background="@color/terminal_bg"
-                            android:lineSpacingExtra="3dp"
-                            android:textIsSelectable="false"
-                            android:clickable="false" />
-                    </ScrollView>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Tap card to open full view · Refresh fetches latest ESP log."
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginTop="6dp" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-
-            <!-- App Logcat card -->
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/cardLogcat"
+            <!-- OTA content wrapper (default collapsed) -->
+            <LinearLayout
+                android:id="@+id/contentOta"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:clickable="true"
-                android:focusable="true"
-                app:cardElevation="0dp"
-                app:cardCornerRadius="12dp"
-                app:strokeColor="?attr/colorOutlineVariant"
-                app:strokeWidth="1dp"
-                android:layout_marginBottom="36dp">
+                android:orientation="vertical"
+                android:visibility="gone">
 
-                <LinearLayout
+                <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="12dp">
+                    app:cardElevation="0dp"
+                    app:cardCornerRadius="12dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp"
+                    android:layout_marginBottom="20dp">
 
-                    <!-- Header row -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:layout_marginBottom="8dp">
+                        android:orientation="vertical"
+                        android:padding="12dp">
 
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="🗒  App Logcat"
-                            android:textAppearance="?attr/textAppearanceTitleSmall" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnExportLogcat"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:text="Export"
-                            android:textSize="12sp"
-                            android:layout_marginEnd="6dp"
-                            app:cornerRadius="8dp"
-                            style="@style/Widget.Material3.Button.TonalButton" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnClearLogcat"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:text="Clear"
-                            android:textSize="12sp"
-                            app:cornerRadius="8dp"
-                            style="@style/Widget.Material3.Button.OutlinedButton" />
-                    </LinearLayout>
-
-                    <ScrollView
-                        android:id="@+id/logcatScrollView"
-                        android:layout_width="match_parent"
-                        android:layout_height="200dp"
-                        android:fillViewport="true">
-
-                        <TextView
-                            android:id="@+id/logcatText"
+                        <!-- Target toggle -->
+                        <com.google.android.material.button.MaterialButtonToggleGroup
+                            android:id="@+id/toggleOtaTarget"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:padding="10dp"
-                            android:text="— no events yet —"
-                            android:fontFamily="monospace"
-                            android:textSize="11sp"
-                            android:textColor="@color/terminal_text"
-                            android:background="@color/terminal_bg"
-                            android:lineSpacingExtra="3dp"
-                            android:textIsSelectable="false"
-                            android:clickable="false" />
-                    </ScrollView>
+                            android:layout_marginBottom="12dp"
+                            app:singleSelection="true"
+                            app:selectionRequired="true">
 
-                    <TextView
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnOtaSender"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="📡  Sender"
+                                style="@style/Widget.Material3.Button.OutlinedButton" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnOtaReceiver"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="🔌  Receiver"
+                                style="@style/Widget.Material3.Button.OutlinedButton" />
+                        </com.google.android.material.button.MaterialButtonToggleGroup>
+
+                        <!-- OTA Password -->
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:hint="OTA Password"
+                            android:layout_marginBottom="10dp"
+                            app:endIconMode="password_toggle"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/editOtaPass"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="textPassword"
+                                android:fontFamily="monospace" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <!-- Enable button -->
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnEnableOta"
+                            android:layout_width="match_parent"
+                            android:layout_height="52dp"
+                            android:text="ENABLE OTA →"
+                            android:layout_marginBottom="10dp"
+                            app:cornerRadius="12dp"
+                            style="@style/Widget.Material3.Button.TonalButton" />
+
+                        <!-- Info / instructions panel -->
+                        <com.google.android.material.card.MaterialCardView
+                            android:id="@+id/otaInfoCard"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:visibility="gone"
+                            app:cardElevation="0dp"
+                            app:cardCornerRadius="10dp"
+                            app:strokeColor="?attr/colorOutlineVariant"
+                            app:strokeWidth="1dp"
+                            android:layout_marginBottom="8dp">
+
+                            <TextView
+                                android:id="@+id/tvOtaInfo"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:padding="14dp"
+                                android:text=""
+                                android:fontFamily="monospace"
+                                android:textSize="12sp"
+                                android:textColor="?attr/colorOnSurface" />
+                        </com.google.android.material.card.MaterialCardView>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="CRC-verified before applying. Power loss during flash keeps old firmware intact."
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+            </LinearLayout>
+            <!-- /contentOta -->
+
+            <!-- ══════════════════════════════════════════════════════════ -->
+            <!-- SECTION: NOTIFICATIONS (collapsible, default closed)      -->
+            <!-- ══════════════════════════════════════════════════════════ -->
+
+            <LinearLayout
+                android:id="@+id/headerNotif"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackground"
+                android:paddingVertical="6dp"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🔔  NOTIFICATIONS"
+                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                    android:textColor="?attr/colorPrimary"
+                    android:letterSpacing="0.08" />
+
+                <ImageView
+                    android:id="@+id/chevronNotif"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_expand_more"
+                    android:tint="?attr/colorPrimary"
+                    android:rotation="-90"
+                    android:contentDescription="expand notifications section" />
+            </LinearLayout>
+
+            <!-- Notification content wrapper (default collapsed) -->
+            <LinearLayout
+                android:id="@+id/contentNotif"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/notifSection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardElevation="0dp"
+                    app:cardCornerRadius="12dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp"
+                    android:layout_marginBottom="20dp">
+
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Tap card to open full view · Export shares log as text."
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginTop="6dp" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
+                        android:orientation="vertical"
+                        android:padding="4dp">
+
+                        <!-- Persistent ongoing notification -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingHorizontal="12dp"
+                            android:paddingVertical="10dp">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Persistent status notification"
+                                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Always-on shade indicator — updates every 2 s"
+                                    android:textAppearance="?attr/textAppearanceBodySmall"
+                                    android:textColor="?attr/colorOnSurfaceVariant" />
+                            </LinearLayout>
+
+                            <com.google.android.material.materialswitch.MaterialSwitch
+                                android:id="@+id/switchPersistentNotif"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true" />
+                        </LinearLayout>
+
+                        <com.google.android.material.divider.MaterialDivider
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginHorizontal="12dp" />
+
+                        <!-- Alert sound on state change -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingHorizontal="12dp"
+                            android:paddingVertical="10dp">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Alert on state change"
+                                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Sound + vibration when motor turns ON or OFF"
+                                    android:textAppearance="?attr/textAppearanceBodySmall"
+                                    android:textColor="?attr/colorOnSurfaceVariant" />
+                            </LinearLayout>
+
+                            <com.google.android.material.materialswitch.MaterialSwitch
+                                android:id="@+id/switchAlertNotif"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Notification sound can be changed in system Settings → Apps → MotorDrive → Notifications."
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:paddingHorizontal="12dp"
+                            android:paddingBottom="10dp" />
+
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+            </LinearLayout>
+            <!-- /contentNotif -->
+
+            <!-- ══════════════════════════════════════════════════════════ -->
+            <!-- SECTION: DIAGNOSTICS / DEVELOPER (collapsible, default    -->
+            <!-- closed — advanced users only)                             -->
+            <!-- ══════════════════════════════════════════════════════════ -->
+
+            <LinearLayout
+                android:id="@+id/headerDiag"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackground"
+                android:paddingVertical="6dp"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🔍  DIAGNOSTICS / DEVELOPER"
+                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                    android:textColor="?attr/colorPrimary"
+                    android:letterSpacing="0.08" />
+
+                <ImageView
+                    android:id="@+id/chevronDiag"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_expand_more"
+                    android:tint="?attr/colorPrimary"
+                    android:rotation="-90"
+                    android:contentDescription="expand diagnostics section" />
+            </LinearLayout>
+
+            <!-- Diagnostics content wrapper (default collapsed) -->
+            <LinearLayout
+                android:id="@+id/contentDiag"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- Serial Monitor card -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardSerial"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    app:cardElevation="0dp"
+                    app:cardCornerRadius="12dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp"
+                    android:layout_marginBottom="12dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <!-- Header row -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginBottom="8dp">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="📟  Serial Monitor"
+                                android:textAppearance="?attr/textAppearanceTitleSmall" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnRefreshSerial"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:text="Refresh"
+                                android:textSize="12sp"
+                                android:layout_marginEnd="6dp"
+                                app:cornerRadius="8dp"
+                                style="@style/Widget.Material3.Button.TonalButton" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnClearSerial"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:text="Clear"
+                                android:textSize="12sp"
+                                app:cornerRadius="8dp"
+                                style="@style/Widget.Material3.Button.OutlinedButton" />
+                        </LinearLayout>
+
+                        <ScrollView
+                            android:id="@+id/serialScrollView"
+                            android:layout_width="match_parent"
+                            android:layout_height="200dp"
+                            android:fillViewport="true">
+
+                            <TextView
+                                android:id="@+id/serialTerminalText"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:padding="10dp"
+                                android:text="— tap card to open full Serial Monitor —"
+                                android:fontFamily="monospace"
+                                android:textSize="11sp"
+                                android:textColor="@color/terminal_text"
+                                android:background="@color/terminal_bg"
+                                android:lineSpacingExtra="3dp"
+                                android:textIsSelectable="false"
+                                android:clickable="false" />
+                        </ScrollView>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Tap card to open full view · Refresh fetches latest ESP log."
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:layout_marginTop="6dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- App Logcat card -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardLogcat"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    app:cardElevation="0dp"
+                    app:cardCornerRadius="12dp"
+                    app:strokeColor="?attr/colorOutlineVariant"
+                    app:strokeWidth="1dp"
+                    android:layout_marginBottom="36dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <!-- Header row -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginBottom="8dp">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="🗒  App Logcat"
+                                android:textAppearance="?attr/textAppearanceTitleSmall" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnExportLogcat"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:text="Export"
+                                android:textSize="12sp"
+                                android:layout_marginEnd="6dp"
+                                app:cornerRadius="8dp"
+                                style="@style/Widget.Material3.Button.TonalButton" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnClearLogcat"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:text="Clear"
+                                android:textSize="12sp"
+                                app:cornerRadius="8dp"
+                                style="@style/Widget.Material3.Button.OutlinedButton" />
+                        </LinearLayout>
+
+                        <ScrollView
+                            android:id="@+id/logcatScrollView"
+                            android:layout_width="match_parent"
+                            android:layout_height="200dp"
+                            android:fillViewport="true">
+
+                            <TextView
+                                android:id="@+id/logcatText"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:padding="10dp"
+                                android:text="— no events yet —"
+                                android:fontFamily="monospace"
+                                android:textSize="11sp"
+                                android:textColor="@color/terminal_text"
+                                android:background="@color/terminal_bg"
+                                android:lineSpacingExtra="3dp"
+                                android:textIsSelectable="false"
+                                android:clickable="false" />
+                        </ScrollView>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Tap card to open full view · Export shares log as text."
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:layout_marginTop="6dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+            </LinearLayout>
+            <!-- /contentDiag -->
 
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>

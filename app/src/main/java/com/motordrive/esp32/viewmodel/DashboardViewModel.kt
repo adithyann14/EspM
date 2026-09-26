@@ -329,6 +329,22 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ── Wi-Fi STA config ───────────────────────────────────────────────────────────
+    fun configureWifi(ssid: String, pass: String, onResult: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            val result = repo().configureWifi(ssid, pass)
+            result.onSuccess { AppLogger.log("WIFI", "STA config sent for SSID: $ssid") }
+                  .onFailure { AppLogger.log("WIFI", "STA config failed: ${it.message}") }
+            onResult(result)
+        }
+    }
+
+    fun getWifiStatus(onResult: (Result<Esp32Repository.WifiStatus>) -> Unit) {
+        viewModelScope.launch {
+            onResult(repo().getWifiStatus())
+        }
+    }
+
     // ═════════════════════════════════════════════════════════════════════
     //  History
     // ═════════════════════════════════════════════════════════════════════

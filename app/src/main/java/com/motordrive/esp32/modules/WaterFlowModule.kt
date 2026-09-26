@@ -12,7 +12,7 @@ import com.motordrive.esp32.databinding.ModuleWaterFlowBinding
  *
  * waterOk semantics (from receiver):
  *   true  = water confirmed, OR motor is off (no active check)
- *   false = motor ON but waiting for flow (30 s cut-off in progress)
+ *   false = motor ON but waiting for flow (dry-run cut-off in progress; default 10 s)
  *   null  = key absent — logged silently, shown as "—"
  */
 class WaterFlowModule(view: View) {

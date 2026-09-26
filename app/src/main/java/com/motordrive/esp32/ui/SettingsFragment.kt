@@ -1,5 +1,6 @@
 package com.motordrive.esp32.ui
 
+import android.animation.ObjectAnimator
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
@@ -7,6 +8,8 @@ import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.view.View
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.view.ViewCompat
@@ -27,8 +30,6 @@ import com.motordrive.esp32.data.ConnectionConfig
 import com.motordrive.esp32.data.Esp32Repository
 import com.motordrive.esp32.databinding.FragmentSettingsBinding
 import com.motordrive.esp32.viewmodel.DashboardViewModel
-import com.motordrive.esp32.viewmodel.NotificationSettings
-import com.motordrive.esp32.viewmodel.SensorVisibility
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,12 +44,22 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         requireContext().getSharedPreferences("mdc_prefs", android.content.Context.MODE_PRIVATE)
     }
 
+    // ── Section expand/collapse state (persisted across navigations) ───────
+    private val sectionExpanded = mutableMapOf(
+        "sensors"    to true,   // expanded by default — critical settings
+        "connection" to true,   // expanded by default — primary use
+        "ota"        to false,  // collapsed — rarely used
+        "notif"      to false,  // collapsed
+        "diag"       to false   // collapsed — developer / advanced
+    )
+
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         _b = FragmentSettingsBinding.bind(view)
 
         applyWindowInsets()
         setupToolbar()
+        setupSections()               // collapsible headers
         setupConnectionModeToggle()
         configureSensorRows()
         populateFields()              // values first — no listeners yet
@@ -57,6 +68,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         setupDryRunSlider()
         setupNotifToggleListeners()
         setupSaveButton()
+        setupWifi()
         setupDiagnostics()
         setupOta()
         observeVm()
@@ -75,6 +87,61 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.toolbar.setNavigationOnClickListener { findNavController().navigateUp() }
     }
 
+    // ── Collapsible sections ───────────────────────────────────────────────
+    private fun setupSections() {
+        // Apply initial visibility states (no animation on first draw)
+        applySectionState("sensors",    b.contentSensors,    b.chevronSensors,    animate = false)
+        applySectionState("connection", b.contentConnection, b.chevronConnection, animate = false)
+        applySectionState("ota",        b.contentOta,        b.chevronOta,        animate = false)
+        applySectionState("notif",      b.contentNotif,      b.chevronNotif,      animate = false)
+        applySectionState("diag",       b.contentDiag,       b.chevronDiag,       animate = false)
+
+        // Click listeners
+        b.headerSensors.setOnClickListener {
+            sectionExpanded["sensors"] = !(sectionExpanded["sensors"] ?: true)
+            applySectionState("sensors", b.contentSensors, b.chevronSensors, animate = true)
+        }
+        b.headerConnection.setOnClickListener {
+            sectionExpanded["connection"] = !(sectionExpanded["connection"] ?: true)
+            applySectionState("connection", b.contentConnection, b.chevronConnection, animate = true)
+        }
+        b.headerOta.setOnClickListener {
+            sectionExpanded["ota"] = !(sectionExpanded["ota"] ?: false)
+            applySectionState("ota", b.contentOta, b.chevronOta, animate = true)
+        }
+        b.headerNotif.setOnClickListener {
+            sectionExpanded["notif"] = !(sectionExpanded["notif"] ?: false)
+            applySectionState("notif", b.contentNotif, b.chevronNotif, animate = true)
+        }
+        b.headerDiag.setOnClickListener {
+            sectionExpanded["diag"] = !(sectionExpanded["diag"] ?: false)
+            applySectionState("diag", b.contentDiag, b.chevronDiag, animate = true)
+        }
+    }
+
+    /**
+     * Show/hide [content] and rotate [chevron] to reflect the current
+     * expanded state for [key]. Pass animate=false for the initial draw.
+     */
+    private fun applySectionState(
+        key: String,
+        content: LinearLayout,
+        chevron: ImageView,
+        animate: Boolean
+    ) {
+        val expanded = sectionExpanded[key] ?: false
+        content.isVisible = expanded
+
+        val targetRotation = if (expanded) 0f else -90f
+        if (animate) {
+            ObjectAnimator.ofFloat(chevron, "rotation", chevron.rotation, targetRotation)
+                .apply { duration = 200 }
+                .start()
+        } else {
+            chevron.rotation = targetRotation
+        }
+    }
+
     private fun setupConnectionModeToggle() {
         b.toggleConnectionMode.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
@@ -89,20 +156,17 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
     }
 
     private fun configureSensorRows() {
-        // Sensor card is always visible (contains RTC and dry-run which are always relevant)
         b.sensorDisplaySection.isVisible = true
 
         b.sensorVoltageRow.isVisible = FeatureConfig.ENABLE_VOLTAGE_SENSORS
         b.sensorCurrentRow.isVisible = FeatureConfig.ENABLE_CURRENT_SENSOR
         b.sensorWaterRow.isVisible   = FeatureConfig.ENABLE_WATER_FLOW
 
-        // Hide the divider above sensor module rows if none are enabled
         val anySensorEnabled = FeatureConfig.ENABLE_VOLTAGE_SENSORS ||
                                FeatureConfig.ENABLE_CURRENT_SENSOR  ||
                                FeatureConfig.ENABLE_WATER_FLOW
         b.dividerSensorModules.isVisible = anySensorEnabled
 
-        // Hide inter-row dividers when a row is absent
         b.dividerVoltageCurrent.isVisible =
             FeatureConfig.ENABLE_VOLTAGE_SENSORS && FeatureConfig.ENABLE_CURRENT_SENSOR
         b.dividerCurrentWater.isVisible =
@@ -140,15 +204,12 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.switchPersistentNotif.isChecked = ns.persistentEnabled
         b.switchAlertNotif.isChecked      = ns.alertEnabled
 
-        // OTA password
         b.editOtaPass.setText(prefs.getString("ota_pass", "motor123"))
         b.toggleOtaTarget.check(R.id.btnOtaSender)
 
-        // RTC (programmatic set — listener attached separately)
         b.switchRtcEnabled.setOnCheckedChangeListener(null)
         b.switchRtcEnabled.isChecked = vm.rtcEnabled.value
 
-        // Dry-run slider
         val dryRunSec = vm.dryRunSeconds.value.toFloat().coerceIn(5f, 60f)
         b.sliderDryRun.value  = dryRunSec
         b.tvDryRunValue.text  = "${dryRunSec.toInt()} s"
@@ -167,7 +228,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
-    // ── RTC toggle — moved here from SchedulerFragment ────────────────────
+    // ── RTC toggle ────────────────────────────────────────────────────────
     private fun setupRtcToggle() {
         b.switchRtcEnabled.setOnCheckedChangeListener { _, checked ->
             vm.setRtcEnabled(checked)
@@ -181,11 +242,9 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
     // ── Dry-run timeout slider ─────────────────────────────────────────────
     private fun setupDryRunSlider() {
-        // Update label while dragging
         b.sliderDryRun.addOnChangeListener { _, value, _ ->
             b.tvDryRunValue.text = "${value.toInt()} s"
         }
-        // Push to ESP only when finger lifts (avoid hammering on each step)
         b.sliderDryRun.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
             override fun onStartTrackingTouch(slider: Slider) {}
             override fun onStopTrackingTouch(slider: Slider) {
@@ -235,6 +294,59 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             ))
             Toast.makeText(requireContext(), "Settings saved", Toast.LENGTH_SHORT).show()
             findNavController().navigateUp()
+        }
+    }
+
+    // ── Home Wi-Fi (STA) config ───────────────────────────────────────────
+    private fun setupWifi() {
+        // Populate SSID status from latest MotorState if already connected
+        vm.motorState.value.staIp?.let { ip ->
+            b.tvWifiStatus.text = "✅ STA connected: $ip"
+        }
+
+        b.btnSaveWifi.setOnClickListener {
+            val ssid = b.editStaSsid.text?.toString()?.trim() ?: ""
+            val pass = b.editStaPass.text?.toString() ?: ""
+            if (ssid.isEmpty()) {
+                b.layoutStaSsid.error = "Enter your home Wi-Fi network name"
+                return@setOnClickListener
+            }
+            b.layoutStaSsid.error = null
+            b.btnSaveWifi.isEnabled = false
+            b.tvWifiStatus.text = "⏳ Sending to ESP…"
+
+            vm.configureWifi(ssid, pass) { result ->
+                viewLifecycleOwner.lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                    if (result.isFailure) {
+                        b.btnSaveWifi.isEnabled = true
+                        b.tvWifiStatus.text = "❌ ${result.exceptionOrNull()?.message}"
+                        return@launch
+                    }
+                    b.tvWifiStatus.text = "⏳ ESP joining network… (checking in 12 s)"
+                    kotlinx.coroutines.delay(12_000L)
+                    vm.getWifiStatus { statusResult ->
+                        viewLifecycleOwner.lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                            b.btnSaveWifi.isEnabled = true
+                            statusResult.onSuccess { ws ->
+                                if (ws.staConnected && ws.staIp != null) {
+                                    b.tvWifiStatus.text = "✅ STA connected: ${ws.staIp}"
+                                    // Auto-fill IP field so user can tap Save & Connect
+                                    b.editIp.setText(ws.staIp)
+                                    Toast.makeText(
+                                        requireContext(),
+                                        "ESP joined ${ws.staSSID} — IP ${ws.staIp}. Tap Save & Connect to update the app.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } else {
+                                    b.tvWifiStatus.text = "⚠️ STA not connected — check SSID / password"
+                                }
+                            }.onFailure {
+                                b.tvWifiStatus.text = "⚠️ Couldn't read status: ${it.message}"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -339,12 +451,11 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
-    // ── Observe ViewModel — RTC, phone-time label, ESP logs, logcat ───────
+    // ── Observe ViewModel ─────────────────────────────────────────────────
     private fun observeVm() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
 
-                // RTC switch state
                 launch {
                     vm.rtcEnabled.collect { enabled ->
                         b.switchRtcEnabled.setOnCheckedChangeListener(null)
@@ -360,12 +471,10 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                     }
                 }
 
-                // Phone time label (shown when RTC is off)
                 launch {
                     vm.phoneTimeLabel.collect { label -> b.tvPhoneTime.text = label }
                 }
 
-                // Dry-run seconds (update slider if changed externally)
                 launch {
                     vm.dryRunSeconds.collect { secs ->
                         val f = secs.toFloat().coerceIn(5f, 60f)
@@ -374,7 +483,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                     }
                 }
 
-                // ESP serial logs
                 launch {
                     vm.espLogs.collect { lines ->
                         if (lines.isEmpty()) {
@@ -389,7 +497,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                     }
                 }
 
-                // App logcat
                 launch {
                     AppLogger.flow.collect { entries ->
                         b.logcatText.text = if (entries.isEmpty()) "— no events yet —"
@@ -403,9 +510,9 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
     // ── Mini serial colour helper ─────────────────────────────────────────
     private fun buildMiniSerialSpan(lines: List<String>): SpannableStringBuilder {
-        val colSend = Color.parseColor("#4FC3F7")   // cyan  — Sender
-        val colRecv = Color.parseColor("#69FF47")   // lime  — Receiver
-        val colDim  = Color.parseColor("#888888")   // grey  — other
+        val colSend = Color.parseColor("#4FC3F7")
+        val colRecv = Color.parseColor("#69FF47")
+        val colDim  = Color.parseColor("#888888")
         val sb = SpannableStringBuilder()
         for (line in lines) {
             val start = sb.length
