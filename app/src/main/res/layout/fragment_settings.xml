@@ -654,11 +654,10 @@
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnViewFullLogcat"
-                            android:layout_width="0dp"
-                            android:layout_height="32dp"
-                            android:layout_weight="1"
-                            android:text="View Full →"
-                            android:textSize="11sp"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:text="Full →"
+                            android:textSize="12sp"
                             android:layout_marginEnd="6dp"
                             app:cornerRadius="8dp"
                             style="@style/Widget.Material3.Button.OutlinedButton" />

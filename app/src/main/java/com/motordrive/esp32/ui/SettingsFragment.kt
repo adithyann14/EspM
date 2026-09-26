@@ -1,8 +1,13 @@
 package com.motordrive.esp32.ui
 
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.View
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -217,9 +222,14 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     vm.espLogs.collect { lines ->
-                        b.serialTerminalText.text = if (lines.isEmpty())
-                            "— tap Refresh to fetch ESP log —"
-                        else lines.joinToString("\n")
+                        if (lines.isEmpty()) {
+                            b.serialTerminalText.text = "— tap Refresh to fetch ESP log —"
+                        } else {
+                            b.serialTerminalText.setText(
+                                buildMiniSerialSpan(lines),
+                                TextView.BufferType.SPANNABLE
+                            )
+                        }
                         b.serialScrollView.post { b.serialScrollView.fullScroll(View.FOCUS_DOWN) }
                     }
                 }
@@ -232,6 +242,28 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                 }
             }
         }
+    }
+
+    // ── Mini serial colour helper ─────────────────────────────────────────
+    private fun buildMiniSerialSpan(lines: List<String>): SpannableStringBuilder {
+        val colSend = Color.parseColor("#4FC3F7")   // cyan  — Sender
+        val colRecv = Color.parseColor("#69FF47")   // lime  — Receiver
+        val colDim  = Color.parseColor("#888888")   // grey  — other
+        val sb = SpannableStringBuilder()
+        for (line in lines) {
+            val start = sb.length
+            sb.append(line).append('\n')
+            val color = when {
+                line.contains("[SEND]") || line.contains("[LORA]") ||
+                line.contains("[COMMS]") || line.contains("[SCHED]") ||
+                line.contains("[TIMER]")  -> colSend
+                line.contains("[RECV]")   -> colRecv
+                else                      -> colDim
+            }
+            sb.setSpan(ForegroundColorSpan(color), start, sb.length,
+                       Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        return sb
     }
 
     // ── OTA ───────────────────────────────────────────────────────────────

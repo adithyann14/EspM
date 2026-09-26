@@ -128,7 +128,9 @@ static bool           g_loraOk   = false;
 static unsigned long  g_lastRxMs = 0;   // last packet from receiver, either radio
 #define COMMS_TIMEOUT_MS 10000UL
 
-static const char* modeStr(CommsMode m) { return m == MODE_LORA ? "LoRa" : "ESP-NOW"; }
+// ── MACRO (not a function) prevents arduino-cli preprocessor from generating
+//    a broken forward-prototype before CommsMode is in scope. ─────────────
+#define modeStr(m)  ((m) == MODE_LORA ? "LoRa" : "ESP-NOW")
 
 // ── ESP-NOW packets ────────────────────────────────────────────────────────
 static uint8_t BCAST_MAC[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
@@ -309,14 +311,30 @@ static void processIncomingPacket(uint8_t* data, int len) {
     case 0x02: {
       if (len < (int)sizeof(StatusPacket)) return;
       StatusPacket pkt; memcpy(&pkt, data, sizeof(pkt));
+
+      // Snapshot before update — detect state transitions for debug logging
+      bool prevMotor = g_motorOn;
+      bool prevWater = g_waterOk;
+      bool prevStall = g_stall;
+
       g_motorOn  = (pkt.motorOn != 0);
       g_currentA = pkt.current;
       g_waterOk  = (pkt.waterOk != 0);
       g_stall    = (pkt.stall   != 0);
-      g_lastRxMs  = millis();
-      g_linkLost  = false;
-      g_blinkReq  = true;
-      if (g_stall) logAdd("[SEND] ⚠ STALL reported by receiver");
+      g_lastRxMs = millis();
+      g_linkLost = false;
+      g_blinkReq = true;
+
+      // ── Debug: log state transitions received from receiver ─────────────
+      if (prevMotor != g_motorOn)
+        logFmt("[RECV] relay → %s  I=%.2fA", g_motorOn ? "ON" : "OFF", g_currentA);
+      if (prevWater != g_waterOk)
+        logFmt("[RECV] water → %s", g_waterOk ? "OK ✔" : "NO ✗");
+      if (!prevStall && g_stall)
+        logAdd("[RECV] ⚠ STALL — motor ON, current ≈ 0 for 5 s");
+      if (prevStall && !g_stall)
+        logAdd("[RECV] stall cleared");
+
       updateLEDs();
       break;
     }

@@ -149,6 +149,17 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     AppLogger.log("STALL",   "Cleared")
                 if (prev.linkOk != new.linkOk)
                     AppLogger.log("ESP-NOW", "RF link ${if (new.linkOk) "UP ✓" else "DOWN ✗"}")
+                // Water sensor state transitions
+                if (prev.waterOk != new.waterOk && new.waterOk != null) {
+                    AppLogger.log("WATER", when {
+                        new.waterOk == true -> "✔ Sensor OK"
+                        new.motorOn         -> "⚠ No water — dry-run guard active"
+                        else                -> "No water (motor off — no guard)"
+                    })
+                }
+                // Current reading logged on motor-on transitions
+                if (!prev.motorOn && new.motorOn && new.current != null)
+                    AppLogger.log("MOTOR", "Running  I=%.2fA".format(new.current))
 
                 _motorState.value = new
             }

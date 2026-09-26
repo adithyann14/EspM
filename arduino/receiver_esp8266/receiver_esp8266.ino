@@ -121,6 +121,31 @@ typedef struct __attribute__((packed)) {
   uint8_t type; uint32_t epoch; uint8_t rtcEnabled;
 } TimeSyncPacket;                                   // 0x06
 
+typedef struct __attribute__((packed)) {
+  uint8_t type; char msg[59];
+} LogPacket;                                        // 0x03  Receiver→Sender
+
+// ── ESP-NOW log forwarding ────────────────────────────────────────────────
+//  Sends a [RECV] tagged log line to the sender so it appears in /api/logs.
+//  Also always prints to local serial. Guard: only sends after ESP-NOW init.
+static bool g_espNowReady = false;
+
+static void sendLogToSender(const char* msg) {
+  Serial.println(msg);                    // always print locally
+  if (!g_espNowReady) return;             // ESP-NOW not yet up — skip send
+  LogPacket pkt;  pkt.type = 0x03;
+  strncpy(pkt.msg, msg, sizeof(pkt.msg) - 1);
+  pkt.msg[sizeof(pkt.msg) - 1] = '\0';
+  esp_now_send(BCAST_MAC, (uint8_t*)&pkt, sizeof(pkt));
+}
+
+// Helper for formatted messages (like printf)
+static void sendLogFmt(const char* fmt, ...) {
+  char buf[60];  va_list ap;
+  va_start(ap, fmt);  vsnprintf(buf, sizeof(buf), fmt, ap);  va_end(ap);
+  sendLogToSender(buf);
+}
+
 // ── ACS712  (5A module, 3.3 V supply) ───────────────────────────────────
 static const float ACS_ZERO_V       = 1.65f;
 static const float ACS_SENS_V_PER_A = 0.122f;
@@ -150,7 +175,9 @@ enum CommsMode : uint8_t { MODE_LORA = 0, MODE_ESPNOW = 1 };
 static CommsMode g_lastCmdMode = MODE_LORA;  // which radio last delivered a command
 static bool      g_loraOk      = false;
 
-static const char* modeStr(CommsMode m) { return m == MODE_LORA ? "LoRa" : "ESP-NOW"; }
+// ── MACRO (not a function) prevents arduino-cli preprocessor from generating
+//    a broken forward-prototype before CommsMode is in scope. ─────────────
+#define modeStr(m)  ((m) == MODE_LORA ? "LoRa" : "ESP-NOW")
 
 // ── Servo state machine ───────────────────────────────────────────────────
 enum class ServoState  : uint8_t { IDLE, PRESSING, RETURNING };
@@ -330,7 +357,7 @@ static void activateMotor() {
   // PIN_WATER uses INPUT_PULLUP: HIGH = no water, LOW = water present.
   // If the sensor is disconnected it reads HIGH (safe — won't run dry).
   if (digitalRead(PIN_WATER) == HIGH) {
-    Serial.println("[RECV] ✗ WATER GUARD: sensor HIGH (no water) — motor start BLOCKED");
+    sendLogToSender("[RECV] ✗ WATER GUARD — no water, start BLOCKED");
     g_waterDetected = false;
     sendStatusNow();
     return;
@@ -365,14 +392,14 @@ static void handleServo(unsigned long now) {
           g_waterCheckActive = true; g_waterCheckStart = now;
           g_waterDetected = false; g_waterLostMs = 0;
           g_stallTimer = 0; g_stallDetected = false;
-          Serial.println("[RECV] ✔ RELAY ON");
+          sendLogToSender("[RECV] ✔ RELAY ON");
           EEPROM.write(EE_MOTOR_WAS_ON, 1); EEPROM.commit();
           sendStatusNow();
         } else if (servoIntent == ServoIntent::STOPPING) {
           digitalWrite(PIN_RELAY, LOW);
           g_motorOn = false;
           g_stallTimer = 0; g_stallDetected = false;
-          Serial.println("[RECV] ✔ RELAY OFF");
+          sendLogToSender("[RECV] ✔ RELAY OFF");
           EEPROM.write(EE_MOTOR_WAS_ON, 0); EEPROM.commit();
           sendStatusNow();
         }
@@ -415,13 +442,13 @@ static void handleWaterSensor(unsigned long now) {
       g_waterDetected    = true;
       g_waterCheckActive = false;
       g_waterLostMs      = 0;
-      Serial.println("[RECV] ✔ water confirmed OK");
+      sendLogToSender("[RECV] ✔ water confirmed OK");
       sendStatusNow();
       return;
     }
     // Dry for too long → cut off (10 s)
     if (now - g_waterCheckStart >= WATER_TIMEOUT_MS) {
-      Serial.println("[RECV] ✗ WATER TIMEOUT 10 s — no water detected — auto cut-off");
+      sendLogToSender("[RECV] ✗ WATER TIMEOUT 10s — auto cut-off");
       g_waterCheckActive = false;
       if (servoState == ServoState::IDLE) deactivateMotor();
       else                                g_queuedCmd = 2;
@@ -437,7 +464,7 @@ static void handleWaterSensor(unsigned long now) {
         Serial.println("[RECV] ⚠ water lost — debouncing...");
       } else if (now - g_waterLostMs >= WATER_LOST_DEBOUNCE_MS) {
         // Sustained dry for 2 s → cut off to prevent dry running
-        Serial.println("[RECV] ✗ WATER LOST 2 s — dry-run guard — auto cut-off");
+        sendLogToSender("[RECV] ✗ WATER LOST 2s — dry-run guard — cut-off");
         g_waterDetected = false;
         g_waterLostMs   = 0;
         if (servoState == ServoState::IDLE) deactivateMotor();
@@ -464,7 +491,7 @@ static void handleStallDetect(unsigned long now) {
     if (g_stallTimer == 0) g_stallTimer = now;
     if ((now - g_stallTimer > STALL_TIMEOUT_MS) && !g_stallDetected) {
       g_stallDetected = true;
-      Serial.println("[RECV] ⚠ STALL — motor ON but I≈0 for 5 s");
+      sendLogToSender("[RECV] ⚠ STALL — relay ON but I≈0 for 5 s");
       sendStatusNow();
     }
   } else {
@@ -694,10 +721,10 @@ void setup() {
   esp_now_register_send_cb(espnowOnSend);
   esp_now_register_recv_cb(espnowOnRecv);
   esp_now_add_peer(BCAST_MAC, ESP_NOW_ROLE_COMBO, WIFI_CH, nullptr, 0);
+  g_espNowReady = true;    // sendLogToSender() may now send packets
 
   for (int i=0;i<3;i++){digitalWrite(PIN_LED,LOW);delay(80);digitalWrite(PIN_LED,HIGH);delay(80);}
-  Serial.printf("[RECV] ready — primary listen=%s + ESP-NOW always active\n",
-                g_loraOk ? "LoRa" : "ESP-NOW-only");
+  sendLogFmt("[RECV] ready  %s + ESP-NOW",  g_loraOk ? "LoRa" : "ESP-NOW-only");
 }
 
 // ══════════════════════════════════════════════════════════════════════════

@@ -27,7 +27,12 @@ class WaterFlowModule(view: View) {
             waterOk == null -> {
                 b.waterStatusText.text = "—"
                 b.waterStatusText.setTextColor(neutral())
-                AppLogger.log("WATER", "No sensor key in status response")
+                // Only log the warning when we're actually connected and the
+                // key is genuinely absent from a real response — not on every
+                // UI refresh before the first successful poll.
+                if (state.isConnected) {
+                    AppLogger.log("WATER", "No sensor key in status response")
+                }
             }
             !motorOn -> {
                 b.waterStatusText.text = "—"

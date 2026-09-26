@@ -3,8 +3,13 @@ package com.motordrive.esp32.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Color
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.View
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -23,12 +28,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Full-screen ESP sender serial-log viewer. Polls /api/logs every 2 s. */
+/**
+ * Full-screen ESP sender serial-log viewer.
+ * Polls /api/logs every 2 s and colour-codes lines by origin:
+ *   [SEND] / [LORA] / [COMMS] / [SCHED] / [TIMER]  →  cyan  (Sender ESP)
+ *   [RECV]                                           →  green (Receiver ESP, forwarded via ESP-NOW)
+ *   anything else                                    →  dim grey
+ */
 class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
 
     private var _b: FragmentFullLogBinding? = null
     private val b get() = _b!!
     private val vm: DashboardViewModel by activityViewModels()
+
+    // Colour palette for log origins
+    private val colSender   = Color.parseColor("#4FC3F7")  // light blue  — Sender
+    private val colReceiver = Color.parseColor("#69FF47")  // bright lime — Receiver
+    private val colSystem   = Color.parseColor("#888888")  // mid-grey    — unknown / system
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -52,6 +68,7 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
 
     override fun onDestroyView() { super.onDestroyView(); _b = null }
 
+    // ── Polling ───────────────────────────────────────────────────────────
     private fun startPolling() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -59,12 +76,19 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
                     Esp32Repository(vm.config.value).getLogs()
                         .onSuccess { lines ->
                             if (_b == null) return@onSuccess
-                            val text = lines.joinToString("\n")
-                            b.tvLogContent.text = text
-                            b.tvLineCount.text  = "${lines.size} lines"
-                            if (b.switchAutoScroll.isChecked && text.isNotEmpty()) {
-                                b.logScrollView.post {
-                                    b.logScrollView.fullScroll(View.FOCUS_DOWN)
+                            if (lines.isEmpty()) {
+                                b.tvLogContent.text = "— waiting for ESP log —"
+                                b.tvLineCount.text  = "0 lines"
+                            } else {
+                                b.tvLogContent.setText(
+                                    buildColoredLog(lines),
+                                    TextView.BufferType.SPANNABLE
+                                )
+                                b.tvLineCount.text = "${lines.size} lines"
+                                if (b.switchAutoScroll.isChecked) {
+                                    b.logScrollView.post {
+                                        b.logScrollView.fullScroll(View.FOCUS_DOWN)
+                                    }
                                 }
                             }
                         }
@@ -78,9 +102,55 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
         }
     }
 
+    // ── Colour-coded log builder ──────────────────────────────────────────
+    private fun buildColoredLog(lines: List<String>): SpannableStringBuilder {
+        val sb = SpannableStringBuilder()
+
+        // Sticky legend line
+        val legend = "● Sender  ● Receiver\n"
+        val legendStart = 0
+        sb.append(legend)
+        // "● Sender"
+        sb.setSpan(ForegroundColorSpan(colSender),   0, 8,
+                   Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // "● Receiver"
+        sb.setSpan(ForegroundColorSpan(colReceiver), 10, 20,
+                   Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // rest of legend in grey
+        sb.setSpan(ForegroundColorSpan(colSystem),   legendStart, legend.length,
+                   Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // Re-colour the two bullets correctly (set after grey to override)
+        sb.setSpan(ForegroundColorSpan(colSender),   0, 8,
+                   Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        sb.setSpan(ForegroundColorSpan(colReceiver), 10, 20,
+                   Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        for (line in lines) {
+            val start = sb.length
+            sb.append(line)
+            sb.append('\n')
+            val color = lineColor(line)
+            sb.setSpan(ForegroundColorSpan(color), start, sb.length,
+                       Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        return sb
+    }
+
+    private fun lineColor(line: String): Int = when {
+        line.contains("[SEND]") || line.contains("[LORA]") ||
+        line.contains("[COMMS]") || line.contains("[SCHED]") ||
+        line.contains("[TIMER]")  -> colSender
+        line.contains("[RECV]")   -> colReceiver
+        else                      -> colSystem
+    }
+
+    // ── Clipboard ─────────────────────────────────────────────────────────
     private fun copyToClipboard() {
         val text = b.tvLogContent.text?.toString() ?: return
-        if (text.isBlank()) { Toast.makeText(requireContext(), "Nothing to copy", Toast.LENGTH_SHORT).show(); return }
+        if (text.isBlank()) {
+            Toast.makeText(requireContext(), "Nothing to copy", Toast.LENGTH_SHORT).show()
+            return
+        }
         val cm = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("ESP Serial Log", text))
         Toast.makeText(requireContext(), "Copied", Toast.LENGTH_SHORT).show()
