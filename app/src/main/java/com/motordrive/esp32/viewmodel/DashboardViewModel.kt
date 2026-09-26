@@ -79,6 +79,10 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     private val _phoneTimeLabel = MutableStateFlow("")
     val phoneTimeLabel: StateFlow<String> = _phoneTimeLabel.asStateFlow()
 
+    // ── Dry-run timeout ───────────────────────────────────────────────────
+    private val _dryRunSeconds = MutableStateFlow(prefs.getInt(K_DRY_RUN, 10))
+    val dryRunSeconds: StateFlow<Int> = _dryRunSeconds.asStateFlow()
+
     // ── History ───────────────────────────────────────────────────────────
     private val _motorHistory = MutableStateFlow(loadHistoryLocal())
     val motorHistory: StateFlow<List<MotorEvent>> = _motorHistory.asStateFlow()
@@ -93,11 +97,18 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     // ── Jobs ──────────────────────────────────────────────────────────────
     private var pollJob:     Job? = null
     private var timeSyncJob: Job? = null
+    /**
+     * Dedicated notification poll — runs every 2 s independently of the main
+     * poll to keep the persistent shade notification accurate.
+     * Does NOT update _motorState (avoids race with the main poll).
+     */
+    private var notifPollJob: Job? = null
 
     init {
         AppLogger.log("VM", "ViewModel started")
         startPolling()
         startTimeSync()
+        startNotifPolling()
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -112,6 +123,25 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopPolling() { pollJob?.cancel() }
+
+    /**
+     * Polls the ESP every 2 seconds purely to keep the persistent notification
+     * in sync with reality. Separate from the main poll so it doesn't depend on
+     * the user's configured poll interval and never fires optimistically on tap.
+     */
+    private fun startNotifPolling() {
+        notifPollJob?.cancel()
+        notifPollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(2_000L)
+                if (_notifSettings.value.persistentEnabled) {
+                    repo().getStatus().onSuccess { state ->
+                        notifMgr.updatePersistent(state.motorOn, true)
+                    }
+                }
+            }
+        }
+    }
 
     private suspend fun poll() {
         repo().getStatus()
@@ -153,7 +183,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                 if (prev.waterOk != new.waterOk && new.waterOk != null) {
                     AppLogger.log("WATER", when {
                         new.waterOk == true -> "✔ Sensor OK"
-                        new.motorOn         -> "⚠ No water — dry-run guard active"
+                        new.motorOn         -> "⚠ No water — dry-run guard active (${_dryRunSeconds.value} s)"
                         else                -> "No water (motor off — no guard)"
                     })
                 }
@@ -193,7 +223,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         expectedMotorOn = on
         expectedTrigger = trigger
 
-        notifMgr.updatePersistent(on, _notifSettings.value.persistentEnabled)
+        // ⚠ Do NOT call notifMgr.updatePersistent(on, …) here.
+        //   The notification is updated only after the ESP confirms the state
+        //   via the 2-second notifPollJob or the poll() call below.
         val result = if (on) repo().motorOn() else repo().motorOff()
         if (result.isSuccess) { delay(400); poll() }
         else {
@@ -280,6 +312,20 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                 repo().syncTime(epoch, _rtcEnabled.value)
                 delay(30_000L)
             }
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  Dry-run timeout
+    // ═════════════════════════════════════════════════════════════════════
+
+    fun setDryRunTimeout(seconds: Int) {
+        _dryRunSeconds.value = seconds
+        prefs.edit().putInt(K_DRY_RUN, seconds).apply()
+        viewModelScope.launch {
+            repo().setDryRunTimeout(seconds)
+                .onSuccess { AppLogger.log("SENSOR", "Dry-run timeout → ${seconds}s") }
+                .onFailure { AppLogger.log("SENSOR", "Dry-run set failed: ${it.message}") }
         }
     }
 
@@ -426,6 +472,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         private const val K_NOTIF_PERSISTENT = "notif_persistent"
         private const val K_NOTIF_ALERT      = "notif_alert"
         private const val K_RTC              = "rtc_enabled"
+        private const val K_DRY_RUN          = "dry_run_sec"
         private const val K_SCHEDULES        = "schedules_json"
         private const val K_HISTORY          = "motor_history"
         private const val MAX_HISTORY        = 500

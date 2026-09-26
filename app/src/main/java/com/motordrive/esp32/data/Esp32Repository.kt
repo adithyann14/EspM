@@ -74,6 +74,19 @@ class Esp32Repository(private val config: ConnectionConfig) {
         httpPostJson("${config.baseUrl}/api/time/sync", body); Unit
     }
 
+    // ── Dry-run timeout ───────────────────────────────────────────────────
+    /**
+     * Push the water-sensor dry-run cutoff duration to the ESP firmware.
+     * Firmware endpoint: POST /api/config/drytimeout  {"dryRunSec":<int>}
+     * Gracefully ignored if the firmware doesn't support it yet.
+     */
+    suspend fun setDryRunTimeout(seconds: Int): Result<Unit> = io {
+        val body = """{"dryRunSec":$seconds}"""
+        try {
+            httpPostJson("${config.baseUrl}/api/config/drytimeout", body)
+        } catch (_: IOException) { /* older firmware — skip silently */ }
+        Unit
+    }
 
     // ── OTA ───────────────────────────────────────────────────────────────
     /**

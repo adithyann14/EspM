@@ -19,6 +19,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
+import com.google.android.material.slider.Slider
 import com.motordrive.esp32.AppLogger
 import com.motordrive.esp32.FeatureConfig
 import com.motordrive.esp32.R
@@ -52,10 +53,13 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         configureSensorRows()
         populateFields()              // values first — no listeners yet
         setupSensorToggleListeners()
+        setupRtcToggle()
+        setupDryRunSlider()
         setupNotifToggleListeners()
         setupSaveButton()
         setupDiagnostics()
         setupOta()
+        observeVm()
     }
 
     override fun onDestroyView() { super.onDestroyView(); _b = null }
@@ -85,12 +89,24 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
     }
 
     private fun configureSensorRows() {
+        // Sensor card is always visible (contains RTC and dry-run which are always relevant)
+        b.sensorDisplaySection.isVisible = true
+
         b.sensorVoltageRow.isVisible = FeatureConfig.ENABLE_VOLTAGE_SENSORS
         b.sensorCurrentRow.isVisible = FeatureConfig.ENABLE_CURRENT_SENSOR
         b.sensorWaterRow.isVisible   = FeatureConfig.ENABLE_WATER_FLOW
-        b.sensorDisplaySection.isVisible =
-            FeatureConfig.ENABLE_VOLTAGE_SENSORS ||
-            FeatureConfig.ENABLE_CURRENT_SENSOR  ||
+
+        // Hide the divider above sensor module rows if none are enabled
+        val anySensorEnabled = FeatureConfig.ENABLE_VOLTAGE_SENSORS ||
+                               FeatureConfig.ENABLE_CURRENT_SENSOR  ||
+                               FeatureConfig.ENABLE_WATER_FLOW
+        b.dividerSensorModules.isVisible = anySensorEnabled
+
+        // Hide inter-row dividers when a row is absent
+        b.dividerVoltageCurrent.isVisible =
+            FeatureConfig.ENABLE_VOLTAGE_SENSORS && FeatureConfig.ENABLE_CURRENT_SENSOR
+        b.dividerCurrentWater.isVisible =
+            (FeatureConfig.ENABLE_VOLTAGE_SENSORS || FeatureConfig.ENABLE_CURRENT_SENSOR) &&
             FeatureConfig.ENABLE_WATER_FLOW
     }
 
@@ -127,8 +143,18 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         // OTA password
         b.editOtaPass.setText(prefs.getString("ota_pass", "motor123"))
         b.toggleOtaTarget.check(R.id.btnOtaSender)
+
+        // RTC (programmatic set — listener attached separately)
+        b.switchRtcEnabled.setOnCheckedChangeListener(null)
+        b.switchRtcEnabled.isChecked = vm.rtcEnabled.value
+
+        // Dry-run slider
+        val dryRunSec = vm.dryRunSeconds.value.toFloat().coerceIn(5f, 60f)
+        b.sliderDryRun.value  = dryRunSec
+        b.tvDryRunValue.text  = "${dryRunSec.toInt()} s"
     }
 
+    // ── Sensor module visibility toggles ──────────────────────────────────
     private fun setupSensorToggleListeners() {
         b.switchShowVoltage.setOnCheckedChangeListener { _, c ->
             vm.updateSensorVisibility(vm.sensorVisibility.value.copy(showVoltage = c))
@@ -141,6 +167,36 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
+    // ── RTC toggle — moved here from SchedulerFragment ────────────────────
+    private fun setupRtcToggle() {
+        b.switchRtcEnabled.setOnCheckedChangeListener { _, checked ->
+            vm.setRtcEnabled(checked)
+            val msg = if (checked)
+                "RTC enabled — firmware will read DS3231 for time"
+            else
+                "RTC disabled — app syncs phone time to ESP every 30 s"
+            Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ── Dry-run timeout slider ─────────────────────────────────────────────
+    private fun setupDryRunSlider() {
+        // Update label while dragging
+        b.sliderDryRun.addOnChangeListener { _, value, _ ->
+            b.tvDryRunValue.text = "${value.toInt()} s"
+        }
+        // Push to ESP only when finger lifts (avoid hammering on each step)
+        b.sliderDryRun.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) {}
+            override fun onStopTrackingTouch(slider: Slider) {
+                val secs = slider.value.toInt()
+                vm.setDryRunTimeout(secs)
+                Toast.makeText(requireContext(), "Dry-run cutoff set to ${secs} s", Toast.LENGTH_SHORT).show()
+            }
+        })
+    }
+
+    // ── Notification toggles ──────────────────────────────────────────────
     private fun setupNotifToggleListeners() {
         b.switchPersistentNotif.setOnCheckedChangeListener { _, c ->
             vm.updateNotifSettings(vm.notifSettings.value.copy(persistentEnabled = c))
@@ -150,6 +206,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
+    // ── Connection save button ─────────────────────────────────────────────
     private fun setupSaveButton() {
         b.btnSave.setOnClickListener {
             val ip   = b.editIp.text?.toString()?.trim() ?: ""
@@ -183,7 +240,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
     // ── Diagnostics ───────────────────────────────────────────────────────
     private fun setupDiagnostics() {
-        // Tap anywhere on the card to open the full-screen view
         b.cardSerial.setOnClickListener {
             findNavController().navigate(R.id.action_settings_to_full_serial)
         }
@@ -218,9 +274,107 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             AppLogger.clear()
             Toast.makeText(requireContext(), "App log cleared", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // ── OTA ───────────────────────────────────────────────────────────────
+    private fun setupOta() {
+        b.toggleOtaTarget.addOnButtonCheckedListener { _, _, _ ->
+            b.otaInfoCard.isVisible = false
+        }
+        b.btnEnableOta.setOnClickListener {
+            val pass = b.editOtaPass.text?.toString()?.trim() ?: ""
+            if (pass.isBlank()) {
+                Toast.makeText(requireContext(), "Enter the OTA password", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            prefs.edit().putString("ota_pass", pass).apply()
+            val isReceiver = b.toggleOtaTarget.checkedButtonId == R.id.btnOtaReceiver
+            if (isReceiver) triggerReceiverOta(pass) else showSenderOtaInfo(pass)
+        }
+    }
+
+    private fun showSenderOtaInfo(pass: String) {
+        val cfg = vm.config.value
+        val url = "${cfg.baseUrl}/update"
+        b.tvOtaInfo.text =
+            "Sender OTA is always ready.\n\n" +
+            "Upload via browser or curl:\n" +
+            "  URL:  $url\n" +
+            "  User: admin\n" +
+            "  Pass: $pass\n\n" +
+            "curl -u admin:$pass -F \"image=@firmware.bin\" $url"
+        b.otaInfoCard.isVisible = true
+        AppLogger.log("OTA", "Sender OTA URL shown: $url")
+    }
+
+    private fun triggerReceiverOta(pass: String) {
+        b.btnEnableOta.isEnabled = false
+        b.tvOtaInfo.text = "Contacting sender…"
+        b.otaInfoCard.isVisible = true
 
         viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { Esp32Repository(vm.config.value).enableReceiverOta(pass) }
+            }
+            b.btnEnableOta.isEnabled = true
+
+            if (result.isSuccess) {
+                b.tvOtaInfo.text =
+                    "✅ Receiver is now in OTA mode (5 min window).\n\n" +
+                    "Steps:\n" +
+                    "1. On your phone: connect Wi-Fi to\n" +
+                    "     MCReceiver-OTA\n" +
+                    "   Password: $pass\n\n" +
+                    "2. Open browser →\n" +
+                    "     http://192.168.4.1/update\n\n" +
+                    "3. Upload receiver firmware .bin\n\n" +
+                    "4. Reconnect phone to MotorControl\n" +
+                    "   when done."
+                AppLogger.log("OTA", "Receiver OTA triggered successfully")
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Unknown error"
+                b.tvOtaInfo.text = "❌ Failed to reach sender:\n$err"
+                AppLogger.log("OTA", "Receiver OTA failed: $err")
+            }
+        }
+    }
+
+    // ── Observe ViewModel — RTC, phone-time label, ESP logs, logcat ───────
+    private fun observeVm() {
+        viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+
+                // RTC switch state
+                launch {
+                    vm.rtcEnabled.collect { enabled ->
+                        b.switchRtcEnabled.setOnCheckedChangeListener(null)
+                        b.switchRtcEnabled.isChecked = enabled
+                        b.switchRtcEnabled.setOnCheckedChangeListener { _, checked ->
+                            vm.setRtcEnabled(checked)
+                        }
+                        b.tvRtcHint.text = if (enabled)
+                            "Hardware DS3231 RTC active — time is read from I²C"
+                        else
+                            "No RTC — app syncs phone time to ESP every 30 s"
+                        b.tvPhoneTime.isVisible = !enabled
+                    }
+                }
+
+                // Phone time label (shown when RTC is off)
+                launch {
+                    vm.phoneTimeLabel.collect { label -> b.tvPhoneTime.text = label }
+                }
+
+                // Dry-run seconds (update slider if changed externally)
+                launch {
+                    vm.dryRunSeconds.collect { secs ->
+                        val f = secs.toFloat().coerceIn(5f, 60f)
+                        if (b.sliderDryRun.value != f) b.sliderDryRun.value = f
+                        b.tvDryRunValue.text = "${secs} s"
+                    }
+                }
+
+                // ESP serial logs
                 launch {
                     vm.espLogs.collect { lines ->
                         if (lines.isEmpty()) {
@@ -234,6 +388,8 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                         b.serialScrollView.post { b.serialScrollView.fullScroll(View.FOCUS_DOWN) }
                     }
                 }
+
+                // App logcat
                 launch {
                     AppLogger.flow.collect { entries ->
                         b.logcatText.text = if (entries.isEmpty()) "— no events yet —"
@@ -265,80 +421,5 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         return sb
-    }
-
-    // ── OTA ───────────────────────────────────────────────────────────────
-    private fun setupOta() {
-        b.toggleOtaTarget.addOnButtonCheckedListener { _, _, _ ->
-            b.otaInfoCard.isVisible = false   // hide info when target changes
-        }
-
-        b.btnEnableOta.setOnClickListener {
-            val pass = b.editOtaPass.text?.toString()?.trim() ?: ""
-            if (pass.isBlank()) {
-                Toast.makeText(requireContext(), "Enter the OTA password", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            // Persist password
-            prefs.edit().putString("ota_pass", pass).apply()
-
-            val isReceiver = b.toggleOtaTarget.checkedButtonId == R.id.btnOtaReceiver
-            if (isReceiver) {
-                triggerReceiverOta(pass)
-            } else {
-                showSenderOtaInfo(pass)
-            }
-        }
-    }
-
-    /** Sender OTA is always available — just tell the user the URL. */
-    private fun showSenderOtaInfo(pass: String) {
-        val cfg = vm.config.value
-        val url = "${cfg.baseUrl}/update"
-        b.tvOtaInfo.text =
-            "Sender OTA is always ready.\n\n" +
-            "Upload via browser or curl:\n" +
-            "  URL:  $url\n" +
-            "  User: admin\n" +
-            "  Pass: $pass\n\n" +
-            "curl -u admin:$pass -F \"image=@firmware.bin\" $url"
-        b.otaInfoCard.isVisible = true
-        AppLogger.log("OTA", "Sender OTA URL shown: $url")
-    }
-
-    /**
-     * Ask the Sender to forward an OTA-enable ESP-NOW packet to the Receiver.
-     * The Receiver then becomes a temporary Wi-Fi AP ("MCReceiver-OTA").
-     */
-    private fun triggerReceiverOta(pass: String) {
-        b.btnEnableOta.isEnabled = false
-        b.tvOtaInfo.text = "Contacting sender…"
-        b.otaInfoCard.isVisible = true
-
-        viewLifecycleOwner.lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { Esp32Repository(vm.config.value).enableReceiverOta(pass) }
-            }
-            b.btnEnableOta.isEnabled = true
-
-            if (result.isSuccess) {
-                b.tvOtaInfo.text =
-                    "✅ Receiver is now in OTA mode (5 min window).\n\n" +
-                    "Steps:\n" +
-                    "1. On your phone: connect Wi-Fi to\n" +
-                    "     MCReceiver-OTA\n" +
-                    "   Password: $pass\n\n" +
-                    "2. Open browser →\n" +
-                    "     http://192.168.4.1/update\n\n" +
-                    "3. Upload receiver firmware .bin\n\n" +
-                    "4. Reconnect phone to MotorControl\n" +
-                    "   when done."
-                AppLogger.log("OTA", "Receiver OTA triggered successfully")
-            } else {
-                val err = result.exceptionOrNull()?.message ?: "Unknown error"
-                b.tvOtaInfo.text = "❌ Failed to reach sender:\n$err"
-                AppLogger.log("OTA", "Receiver OTA failed: $err")
-            }
-        }
     }
 }

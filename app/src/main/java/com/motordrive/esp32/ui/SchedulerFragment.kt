@@ -27,8 +27,7 @@ import kotlinx.coroutines.launch
  * Tab 3 — Scheduler.
  *
  * Up to 8 start/stop schedule entries, stored in EEPROM on both ESPs.
- * When RTC is OFF (default), the app syncs phone time to the ESP every 30 s.
- * When RTC is ON, the ESP uses its DS3231 module after the first sync.
+ * RTC / time-sync settings have been moved to Settings → Sensors.
  */
 class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
 
@@ -75,6 +74,11 @@ class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
     }
 
     private fun setupControls() {
+        // "Open" button on the RTC note card → go to Settings
+        b.btnGoToRtcSettings.setOnClickListener {
+            findNavController().navigate(R.id.action_scheduler_to_settings)
+        }
+
         b.btnAddSchedule.setOnClickListener {
             if (vm.schedules.value.size >= 8) {
                 Toast.makeText(requireContext(), "Maximum 8 schedules reached", Toast.LENGTH_SHORT).show()
@@ -90,16 +94,6 @@ class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
                 .setPositiveButton("Revoke All") { _, _ -> vm.clearAllSchedules() }
                 .setNegativeButton("Cancel", null)
                 .show()
-        }
-
-        // RTC toggle — immediately persists and notifies ESP
-        b.switchRtcEnabled.setOnCheckedChangeListener { _, checked ->
-            vm.setRtcEnabled(checked)
-            val msg = if (checked)
-                "RTC enabled — firmware will read DS3231 for time"
-            else
-                "RTC disabled — app syncs phone time to ESP every 30 s"
-            Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -163,24 +157,6 @@ class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
                         b.tvNoSchedules.isVisible = entries.isEmpty()
                         b.btnRevokeAll.isEnabled  = entries.isNotEmpty()
                     }
-                }
-                launch {
-                    vm.rtcEnabled.collect { enabled ->
-                        // Suppress listener while we set the switch programmatically
-                        b.switchRtcEnabled.setOnCheckedChangeListener(null)
-                        b.switchRtcEnabled.isChecked = enabled
-                        b.switchRtcEnabled.setOnCheckedChangeListener { _, checked ->
-                            vm.setRtcEnabled(checked)
-                        }
-                        b.tvRtcHint.text = if (enabled)
-                            "Hardware DS3231 RTC active — time is read from I²C"
-                        else
-                            "No RTC — app syncs phone time to ESP every 30 s"
-                        b.tvPhoneTime.isVisible = !enabled
-                    }
-                }
-                launch {
-                    vm.phoneTimeLabel.collect { label -> b.tvPhoneTime.text = label }
                 }
             }
         }

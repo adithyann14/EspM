@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.motordrive.esp32.data.ScheduleEntry
 import com.motordrive.esp32.databinding.ItemScheduleBinding
 
@@ -24,7 +25,17 @@ class ScheduleAdapter(
             b.switchEnabled.isChecked = entry.enabled
             b.switchEnabled.setOnCheckedChangeListener { _, checked -> onToggle(entry, checked) }
 
-            b.btnDelete.setOnClickListener { onDelete(entry) }
+            b.btnDelete.setOnClickListener {
+                MaterialAlertDialogBuilder(b.root.context)
+                    .setTitle("Delete Schedule?")
+                    .setMessage(
+                        "${entry.startLabel()} → ${entry.stopLabel()}\n${entry.daysLabel()}\n\n" +
+                        "This schedule will be removed from both ESPs."
+                    )
+                    .setPositiveButton("Delete") { _, _ -> onDelete(entry) }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
         }
     }
 
