@@ -154,10 +154,10 @@ static bool           g_linkLost = true;
 static unsigned long  g_lastRxMs = 0;
 
 // ── ESP-NOW RSSI (promiscuous sniffer) ────────────────────────────────────
-static volatile int8_t  g_lastRssi       = 0;
-static volatile bool    g_hasRssi        = false;
-static uint8_t          g_receiverMac[6] = {0};
-static bool             g_receiverMacKnown = false;
+static volatile int8_t  g_lastRssi         = 0;
+static volatile bool    g_hasRssi          = false;
+static uint8_t          g_receiverMac[6]   = {0};
+static volatile bool    g_receiverMacKnown = false;  // volatile: written in recv CB, read in IRAM ISR
 
 // ── Button debounce ────────────────────────────────────────────────────────
 static uint8_t       g_btnOnState  = 0, g_btnOffState = 0;
@@ -200,6 +200,23 @@ static uint8_t epochDayBit(uint32_t e) {
 
 // ── HTTP server ────────────────────────────────────────────────────────────
 static ESP8266WebServer server(80);
+
+// ── Safe EEPROM commit ────────────────────────────────────────────────────
+// ALWAYS disable the promiscuous IRAM ISR before committing to flash.
+// If the sniffer fires during spi_flash_write() it can corrupt the write
+// or cause a crash/WDT reset.
+static void safeCommit() {
+  wifi_promiscuous_enable(0);
+  EEPROM.commit();
+  wifi_promiscuous_enable(1);
+}
+// Wrapper that replaces standalone eeSave() calls outside the motor command
+// (which already manages its own promiscuous disable/enable window).
+static void safeSave() {
+  wifi_promiscuous_enable(0);
+  eeSave();
+  wifi_promiscuous_enable(1);
+}
 
 // Forward declarations
 static void sendMotorCommandInternal(bool on);
@@ -266,7 +283,7 @@ static void eeSaveStaCreds() {
   for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_SSID + i, (uint8_t)g_staSSID[i]);
   for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_PASS + i, (uint8_t)g_staPass[i]);
   EEPROM.write(EE_STA_MAGIC, EE_STA_MAGIC_VAL);
-  EEPROM.commit();
+  safeCommit();  // disable IRAM ISR before flash write
   logFmt("[WIFI] STA creds saved  SSID='%s'", g_staSSID);
 }
 
@@ -462,13 +479,13 @@ static void handleTimerTick() {
     g_timerRemain = 0; g_timerActive = false;
     logAdd("[SEND] ⏰ timer expired — Motor OFF");
     sendMotorCommandInternal(false);
-    EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); EEPROM.commit();
+    EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); safeCommit();
     sendTimerPacket();
   } else {
     g_timerRemain -= (uint32_t)elapsed;
     if (now - g_timerLastSaveMs >= TIMER_SAVE_INTERVAL_MS) {
       g_timerLastSaveMs = now;
-      eeWriteU32(EE_TIMER_REM, g_timerRemain); EEPROM.commit();
+      eeWriteU32(EE_TIMER_REM, g_timerRemain); safeCommit();
     }
   }
 }
@@ -597,9 +614,14 @@ void handleLogs() {
     if (i > 0) j += ',';
     j += '"';
     for (const char* p = g_log[idx]; *p; p++) {
-      if      (*p == '"')  j += "\\\"";
-      else if (*p == '\\') j += "\\\\";
-      else                 j += *p;
+      char c = *p;
+      if      (c == '"')  j += "\\\"";
+      else if (c == '\\') j += "\\\\";
+      else if (c == '\n') j += "\\n";
+      else if (c == '\r') j += "\\r";
+      else if (c == '\t') j += "\\t";
+      else if ((uint8_t)c < 0x20) { /* skip other control chars */ }
+      else                j += c;
     }
     j += '"';
   }
@@ -616,7 +638,7 @@ void handleTimerSet() {
   bool     ar  = (autIdx >= 0) && (body.substring(autIdx + 14).toInt() != 0);
   g_timerTotal = sec; g_timerRemain = sec; g_timerAutoRst = ar;
   g_timerActive = true; g_timerLastTick = millis(); g_timerLastSaveMs = 0;
-  eeSave();
+  safeSave();
   logFmt("[TIMER] set %lus  autoRestart=%d", (unsigned long)sec, (int)ar);
   sendTimerPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
@@ -624,7 +646,7 @@ void handleTimerSet() {
 
 void handleTimerCancel() {
   g_timerActive = false; g_timerRemain = 0;
-  EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); EEPROM.commit();
+  EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); safeCommit();
   logAdd("[TIMER] cancelled");
   sendTimerPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
@@ -649,24 +671,35 @@ void handleSchedPush() {
   g_schedCount = (uint8_t)min(8L, body.substring(cntIdx + 8).toInt());
   int pos = entIdx + 10;
   for (uint8_t i = 0; i < g_schedCount; i++) {
+    // Guard: if we can't find the next entry object, stop — don't re-parse
+    // from the beginning (indexOf({,−1) would wrap and corrupt schedules).
+    int entryStart = body.indexOf("{", pos);
+    if (entryStart < 0) { g_schedCount = i; break; }
+    pos = entryStart;
+
     SchedEntry& s = g_scheds[i];
     auto rd = [&](const char* k) -> uint8_t {
       int ki = body.indexOf(k, pos); if (ki < 0) return 0;
-      return (uint8_t)body.substring(ki + strlen(k)).toInt();
+      return (uint8_t)body.substring(ki + (int)strlen(k)).toInt();
     };
     s.startH = rd("\"startH\":"); s.startM = rd("\"startM\":");
     s.stopH  = rd("\"stopH\":");  s.stopM  = rd("\"stopM\":");
-    s.days = rd("\"days\":"); s.autoRestart = rd("\"autoRestart\":"); s.enabled = rd("\"enabled\":");
-    pos = body.indexOf("{", pos + 1);
+    s.days        = rd("\"days\":");
+    s.autoRestart = rd("\"autoRestart\":");
+    s.enabled     = rd("\"enabled\":");
+    s.pad         = 0;
+
+    pos = body.indexOf("{", pos + 1);   // advance past current entry
+    if (pos < 0) { if (i + 1 < g_schedCount) g_schedCount = i + 1; break; }
   }
-  eeSave();
+  safeSave();
   logFmt("[SCHED] pushed %d schedule(s)", (int)g_schedCount);
   sendSchedPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }
 
 void handleSchedClear() {
-  g_schedCount = 0; memset(g_scheds, 0, sizeof(g_scheds)); eeSave();
+  g_schedCount = 0; memset(g_scheds, 0, sizeof(g_scheds)); safeSave();
   logAdd("[SCHED] cleared"); sendSchedPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }
@@ -680,7 +713,7 @@ void handleTimeSync() {
   g_epochMs = millis();
   g_rtcEnabled = (rtcIdx >= 0) && (body.substring(rtcIdx + 13).toInt() != 0);
   EEPROM.write(EE_RTC_FLAG, g_rtcEnabled ? 1 : 0);
-  eeWriteU32(EE_EPOCH, g_epoch); EEPROM.commit();
+  eeWriteU32(EE_EPOCH, g_epoch); safeCommit();
   sendTimeSyncPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }

@@ -152,6 +152,13 @@ static ServoState    servoState  = ServoState::IDLE;
 static ServoIntent   servoIntent = ServoIntent::NONE;
 static unsigned long servoTimer  = 0;
 
+// ── Deferred ESP-NOW RX buffer ────────────────────────────────────────────
+// Packets are copied here inside the callback, then processed safely in loop().
+// This avoids calling EEPROM.commit() or esp_now_send() from callback context.
+static uint8_t          g_rxBuf[250];
+static volatile uint8_t g_rxLen     = 0;
+static volatile bool    g_rxPending = false;
+
 // ── Motor / command state ─────────────────────────────────────────────────
 static volatile bool     g_pendingOn  = false;
 static volatile bool     g_pendingOff = false;
@@ -559,8 +566,14 @@ static void processPacket(uint8_t* data, uint8_t len) {
 
 void espnowOnSend(uint8_t*, uint8_t) { }
 
+// SAFE: only copies raw bytes; no EEPROM, no Serial, no esp_now_send here.
+// processPacket() runs in loop() after g_rxPending is consumed.
 void espnowOnRecv(uint8_t*, uint8_t* data, uint8_t len) {
-  processPacket(data, len);
+  if (g_rxPending) return;                             // previous not yet consumed — drop
+  uint8_t n = (len > (uint8_t)sizeof(g_rxBuf)) ? (uint8_t)sizeof(g_rxBuf) : len;
+  memcpy(g_rxBuf, data, n);
+  g_rxLen     = n;
+  g_rxPending = true;                                  // signal loop()
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -631,11 +644,19 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  // ── Deferred ESP-NOW packet processing (safe: called from loop, not callback) ──
+  if (g_rxPending) {
+    uint8_t len  = g_rxLen;
+    g_rxPending  = false;          // clear flag before processing so a new RX can queue
+    processPacket(g_rxBuf, len);
+  }
+
   updateCurrentEMA(now);
 
   // ── LED blink on RX ──────────────────────────────────────────────────
   if (g_rxFlag) { g_rxFlag = false; g_blinkUntil = now + BLINK_MS; digitalWrite(PIN_LED, LOW); }
-  if (now >= g_blinkUntil) digitalWrite(PIN_LED, HIGH);
+  // Use signed subtraction to handle millis() wrap-around correctly (~49 days)
+  if ((long)(now - g_blinkUntil) >= 0) digitalWrite(PIN_LED, HIGH);
 
   // ── Command conflict: OFF always wins over ON ─────────────────────────
   if (g_pendingOff && g_pendingOn) g_pendingOn = false;

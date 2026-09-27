@@ -296,6 +296,9 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:checked="true" />
+                        </LinearLayout>
+                        <!-- /sensorWaterRow -->
+
                         <com.google.android.material.divider.MaterialDivider
                             android:id="@+id/dividerWaterRssi"
                             android:layout_width="match_parent"
