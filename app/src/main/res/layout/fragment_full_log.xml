@@ -27,59 +27,79 @@
         android:orientation="vertical"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
-        <!-- Control bar -->
+        <!-- Control bar — two rows so nothing clips on narrow screens -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="4dp"
-            android:background="#1A1A1A">
+            android:orientation="vertical"
+            android:background="#1A1A1A"
+            android:paddingHorizontal="12dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="4dp">
 
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/switchAutoScroll"
-                android:layout_width="wrap_content"
+            <!-- Row 1: Auto-scroll + line count -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Auto-scroll"
-                android:textColor="#00C853"
-                android:textSize="12sp"
-                android:checked="true" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
 
-            <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchAutoScroll"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Auto-scroll"
+                    android:textColor="#00C853"
+                    android:textSize="12sp"
+                    android:checked="true" />
 
-            <TextView
-                android:id="@+id/tvLineCount"
-                android:layout_width="wrap_content"
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/tvLineCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0 lines"
+                    android:textColor="#555555"
+                    android:textSize="11sp"
+                    android:fontFamily="monospace" />
+            </LinearLayout>
+
+            <!-- Row 2: Copy + Clear buttons right-aligned -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="0 lines"
-                android:textColor="#555555"
-                android:textSize="11sp"
-                android:fontFamily="monospace"
-                android:layout_marginEnd="10dp" />
+                android:orientation="horizontal"
+                android:gravity="end"
+                android:layout_marginBottom="2dp">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnCopy"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="Copy"
-                android:textSize="11sp"
-                android:textColor="#00C853"
-                android:layout_marginEnd="6dp"
-                app:strokeColor="#333333"
-                app:cornerRadius="6dp"
-                style="@style/Widget.Material3.Button.OutlinedButton" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCopy"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:text="Copy"
+                    android:textSize="12sp"
+                    android:textColor="#00C853"
+                    android:layout_marginEnd="8dp"
+                    app:strokeColor="#333333"
+                    app:cornerRadius="6dp"
+                    style="@style/Widget.Material3.Button.OutlinedButton" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnClearLog"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="Clear"
-                android:textSize="11sp"
-                android:textColor="#00C853"
-                app:strokeColor="#333333"
-                app:cornerRadius="6dp"
-                style="@style/Widget.Material3.Button.OutlinedButton" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnClearLog"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:text="Clear"
+                    android:textSize="12sp"
+                    android:textColor="#00C853"
+                    app:strokeColor="#333333"
+                    app:cornerRadius="6dp"
+                    style="@style/Widget.Material3.Button.OutlinedButton" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- Terminal area -->

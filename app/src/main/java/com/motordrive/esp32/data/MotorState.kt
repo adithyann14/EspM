@@ -12,8 +12,9 @@ package com.motordrive.esp32.data
  *                              // false = motor ON but waiting for water at pipe end
  *   "stall":       false,      // true = relay ON but current < 0.10 A for 5 s
  *   "linkOk":      true,       // true = receiver status packet arrived < 10 s ago
- *   "commsMode":   "LoRa",    // "LoRa" | "ESP-NOW" — active radio link
- *   "staIp":       "192.168.1.42"  // STA IP when on home Wi-Fi, absent otherwise
+ *   "commsMode":   "ESP-NOW",  // "LoRa" | "ESP-NOW" — active radio link
+ *   "staIp":       "192.168.1.42",  // STA IP when on home Wi-Fi, absent otherwise
+ *   "rssi":        -65         // ESP-NOW link RSSI in dBm, null if not yet measured
  * }
  *
  * Absent keys stay null; UI shows "—".
@@ -44,6 +45,11 @@ data class MotorState(
 
     // Network — STA IP when ESP joined home Wi-Fi, null otherwise
     val staIp: String? = null,
+
+    // MODULE E: ESP-NOW RSSI in dBm (negative; closer to 0 = stronger)
+    // Captured via promiscuous sniffer on the sender ESP8266.
+    // null = not yet captured (sniffer hasn't seen a packet from receiver yet)
+    val rssi: Int? = null,
 
     // Connection metadata
     val isConnected:   Boolean = false,

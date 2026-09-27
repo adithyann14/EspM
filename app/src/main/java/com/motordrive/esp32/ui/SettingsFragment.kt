@@ -64,7 +64,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         configureSensorRows()
         populateFields()              // values first — no listeners yet
         setupSensorToggleListeners()
-        setupRtcToggle()
         setupDryRunSlider()
         setupNotifToggleListeners()
         setupSaveButton()
@@ -89,14 +88,12 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
     // ── Collapsible sections ───────────────────────────────────────────────
     private fun setupSections() {
-        // Apply initial visibility states (no animation on first draw)
         applySectionState("sensors",    b.contentSensors,    b.chevronSensors,    animate = false)
         applySectionState("connection", b.contentConnection, b.chevronConnection, animate = false)
         applySectionState("ota",        b.contentOta,        b.chevronOta,        animate = false)
         applySectionState("notif",      b.contentNotif,      b.chevronNotif,      animate = false)
         applySectionState("diag",       b.contentDiag,       b.chevronDiag,       animate = false)
 
-        // Click listeners
         b.headerSensors.setOnClickListener {
             sectionExpanded["sensors"] = !(sectionExpanded["sensors"] ?: true)
             applySectionState("sensors", b.contentSensors, b.chevronSensors, animate = true)
@@ -119,10 +116,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         }
     }
 
-    /**
-     * Show/hide [content] and rotate [chevron] to reflect the current
-     * expanded state for [key]. Pass animate=false for the initial draw.
-     */
     private fun applySectionState(
         key: String,
         content: LinearLayout,
@@ -131,12 +124,10 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
     ) {
         val expanded = sectionExpanded[key] ?: false
         content.isVisible = expanded
-
         val targetRotation = if (expanded) 0f else -90f
         if (animate) {
             ObjectAnimator.ofFloat(chevron, "rotation", chevron.rotation, targetRotation)
-                .apply { duration = 200 }
-                .start()
+                .apply { duration = 200 }.start()
         } else {
             chevron.rotation = targetRotation
         }
@@ -161,10 +152,12 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.sensorVoltageRow.isVisible = FeatureConfig.ENABLE_VOLTAGE_SENSORS
         b.sensorCurrentRow.isVisible = FeatureConfig.ENABLE_CURRENT_SENSOR
         b.sensorWaterRow.isVisible   = FeatureConfig.ENABLE_WATER_FLOW
+        b.sensorRssiRow.isVisible    = FeatureConfig.ENABLE_ESPNOW_RSSI
 
         val anySensorEnabled = FeatureConfig.ENABLE_VOLTAGE_SENSORS ||
                                FeatureConfig.ENABLE_CURRENT_SENSOR  ||
-                               FeatureConfig.ENABLE_WATER_FLOW
+                               FeatureConfig.ENABLE_WATER_FLOW      ||
+                               FeatureConfig.ENABLE_ESPNOW_RSSI
         b.dividerSensorModules.isVisible = anySensorEnabled
 
         b.dividerVoltageCurrent.isVisible =
@@ -172,6 +165,9 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.dividerCurrentWater.isVisible =
             (FeatureConfig.ENABLE_VOLTAGE_SENSORS || FeatureConfig.ENABLE_CURRENT_SENSOR) &&
             FeatureConfig.ENABLE_WATER_FLOW
+        b.dividerWaterRssi.isVisible =
+            (FeatureConfig.ENABLE_VOLTAGE_SENSORS || FeatureConfig.ENABLE_CURRENT_SENSOR ||
+             FeatureConfig.ENABLE_WATER_FLOW) && FeatureConfig.ENABLE_ESPNOW_RSSI
     }
 
     private fun populateFields() {
@@ -199,6 +195,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.switchShowVoltage.isChecked = vis.showVoltage
         b.switchShowCurrent.isChecked = vis.showCurrent
         b.switchShowWater.isChecked   = vis.showWater
+        b.switchShowRssi.isChecked    = vis.showRssi
 
         val ns = vm.notifSettings.value
         b.switchPersistentNotif.isChecked = ns.persistentEnabled
@@ -206,9 +203,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
         b.editOtaPass.setText(prefs.getString("ota_pass", "motor123"))
         b.toggleOtaTarget.check(R.id.btnOtaSender)
-
-        b.switchRtcEnabled.setOnCheckedChangeListener(null)
-        b.switchRtcEnabled.isChecked = vm.rtcEnabled.value
 
         val dryRunSec = vm.dryRunSeconds.value.toFloat().coerceIn(5f, 60f)
         b.sliderDryRun.value  = dryRunSec
@@ -226,17 +220,8 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.switchShowWater.setOnCheckedChangeListener { _, c ->
             vm.updateSensorVisibility(vm.sensorVisibility.value.copy(showWater = c))
         }
-    }
-
-    // ── RTC toggle ────────────────────────────────────────────────────────
-    private fun setupRtcToggle() {
-        b.switchRtcEnabled.setOnCheckedChangeListener { _, checked ->
-            vm.setRtcEnabled(checked)
-            val msg = if (checked)
-                "RTC enabled — firmware will read DS3231 for time"
-            else
-                "RTC disabled — app syncs phone time to ESP every 30 s"
-            Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
+        b.switchShowRssi.setOnCheckedChangeListener { _, c ->
+            vm.updateSensorVisibility(vm.sensorVisibility.value.copy(showRssi = c))
         }
     }
 
@@ -299,7 +284,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
 
     // ── Home Wi-Fi (STA) config ───────────────────────────────────────────
     private fun setupWifi() {
-        // Populate SSID status from latest MotorState if already connected
         vm.motorState.value.staIp?.let { ip ->
             b.tvWifiStatus.text = "✅ STA connected: $ip"
         }
@@ -330,7 +314,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
                             statusResult.onSuccess { ws ->
                                 if (ws.staConnected && ws.staIp != null) {
                                     b.tvWifiStatus.text = "✅ STA connected: ${ws.staIp}"
-                                    // Auto-fill IP field so user can tap Save & Connect
                                     b.editIp.setText(ws.staIp)
                                     Toast.makeText(
                                         requireContext(),
@@ -455,25 +438,6 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
     private fun observeVm() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-
-                launch {
-                    vm.rtcEnabled.collect { enabled ->
-                        b.switchRtcEnabled.setOnCheckedChangeListener(null)
-                        b.switchRtcEnabled.isChecked = enabled
-                        b.switchRtcEnabled.setOnCheckedChangeListener { _, checked ->
-                            vm.setRtcEnabled(checked)
-                        }
-                        b.tvRtcHint.text = if (enabled)
-                            "Hardware DS3231 RTC active — time is read from I²C"
-                        else
-                            "No RTC — app syncs phone time to ESP every 30 s"
-                        b.tvPhoneTime.isVisible = !enabled
-                    }
-                }
-
-                launch {
-                    vm.phoneTimeLabel.collect { label -> b.tvPhoneTime.text = label }
-                }
 
                 launch {
                     vm.dryRunSeconds.collect { secs ->

@@ -1,75 +1,47 @@
 /**
  * ════════════════════════════════════════════════════════════════════════
- *  RECEIVER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v3
+ *  RECEIVER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v4
  *
- *  Comms: always listens on BOTH LoRa and ESP-NOW simultaneously.
- *         Replies (status packets) are sent on whichever radio the last
- *         command arrived on (g_lastCmdMode).
+ *  Comms: ESP-NOW only.  Max TX power: 20.5 dBm, PHY 802.11b.
+ *  Listens on ESP-NOW; replies (status packets) via ESP-NOW broadcast.
  *
- *  ── LoRa Ra-02 SX1278 wiring ─────────────────────────────────────────
- *  VCC  → 3.3V  ⚠ add 100µF electrolytic + 100nF ceramic to GND at module
- *  GND  → GND
- *  RST  → D0
- *  NSS  → D8   ⚠ add 10kΩ pull-up resistor from D8 to 3.3V rail
- *  MOSI → D7
- *  MISO → D6
- *  SCK  → D5
- *  DIO0 → leave UNCONNECTED (D4 = GPIO2 = built-in LED — do not wire DIO0 here)
- *           optionally solder 100kΩ pull-down from DIO0 pad to GND
- *  ANT  → 17.3 cm wire (mandatory)
+ *  ── Pins ──────────────────────────────────────────────────────────────
+ *  D1 (GPIO5)  → Relay IN, active HIGH
+ *  D2 (GPIO4)  → Water sensor (INPUT_PULLUP): LOW=water, HIGH=dry
+ *  D3 (GPIO0)  → Servo signal
+ *  D4 (GPIO2)  → Built-in LED, active LOW
+ *  A0          → ACS712 current sensor output
  *
- *  SyncWord must match sender (0xAB). Frequency must match (433 MHz).
- *
- *  0x07 ConfigPacket  Sender→Receiver  (dry-run timeout from app slider)
- *  ── Water sensor fixes (v3) ──────────────────────────────────────────
- *  • PIN_WATER now INPUT_PULLUP — fixes floating-pin false reads
- *  • Logic: HIGH = no water (sensor open), LOW = water present
- *  • Pre-start guard in activateMotor(): refuses if pin reads HIGH at start
- *  • Timeout reduced from 30 s → 10 s (WATER_TIMEOUT_MS)
- *  • Continuous guard: if water disappears mid-run for >2 s → auto cut-off
- *
- *  ── Hardware summary ─────────────────────────────────────────────────
- *  D1 = Relay (active HIGH)   D2 = Water sensor (INPUT_PULLUP)
- *  D3 = Servo signal          D4 = Built-in LED (active LOW) — no LoRa DIO0
- *  D5 = SCK  D6 = MISO  D7 = MOSI  D8 = NSS  D0 = RST
- *  A0 = ACS712 current sensor
+ *  ── Water sensor logic ───────────────────────────────────────────────
+ *  INPUT_PULLUP: disconnected/dry → HIGH (safe, no false start).
+ *  Sensor grounds pin when water present → LOW (water confirmed).
+ *  Pre-start guard: blocks ON if pin reads HIGH at start.
+ *  10 s dry-run timeout. 2 s mid-run debounce auto cut-off.
  * ════════════════════════════════════════════════════════════════════════
  */
 
 #include <ESP8266WiFi.h>
 #include <Servo.h>
 #include <EEPROM.h>
-#include <SPI.h>
-#include <LoRa.h>
 
 extern "C" {
   #include <espnow.h>
   #include <user_interface.h>
 }
 
-// ── LoRa SX1278 pins ─────────────────────────────────────────────────────
-#define LORA_RST  D0   // GPIO16
-#define LORA_NSS  D8   // GPIO15  ← add 10kΩ pull-up to 3.3V on breadboard
-#define LORA_SCK  D5   // GPIO14  hardware SPI
-#define LORA_MISO D6   // GPIO12  hardware SPI
-#define LORA_MOSI D7   // GPIO13  hardware SPI
-#define LORA_DIO0 D4   // GPIO2  = built-in LED pin — leave DIO0 UNCONNECTED
-//                                Leave DIO0 pad floating or add 100kΩ to GND
-
 // ── Pins ──────────────────────────────────────────────────────────────────
 #define PIN_RELAY  D1   // GPIO5   Relay IN, active HIGH
 #define PIN_WATER  D2   // GPIO4   Water sensor: HIGH=no water, LOW=water
-#define PIN_SERVO  D3   // GPIO0   Servo signal  ⚠ boot pin
+#define PIN_SERVO  D3   // GPIO0   Servo signal
 #define PIN_LED    2    // GPIO2   Built-in LED, active LOW (= D4)
-//  D4/GPIO2 is the built-in LED — do NOT wire LoRa DIO0 here
 
-// ── Sender AP credentials ─────────────────────────────────────────────────
+// ── Sender AP credentials (for ESP-NOW channel sync) ─────────────────────
 static const char*    AP_SSID    = "MotorControl";
 static const char*    AP_PASS    = "motor1234";
 static const uint8_t  WIFI_CH    = 1;
-static const uint16_t AP_TIMEOUT = 5000;  // reduced from 10 s; LoRa works without AP
+static const uint16_t AP_TIMEOUT = 5000;
 
-// ── EEPROM (same layout as Sender) ───────────────────────────────────────
+// ── EEPROM ────────────────────────────────────────────────────────────────
 #define EE_SIZE          128
 #define EE_MAGIC         0
 #define EE_TIMER_TOTAL   1
@@ -109,6 +81,10 @@ typedef struct __attribute__((packed)) {
 } StatusPacket;                                     // 0x02
 
 typedef struct __attribute__((packed)) {
+  uint8_t type; char msg[59];
+} LogPacket;                                        // 0x03  Receiver→Sender
+
+typedef struct __attribute__((packed)) {
   uint8_t type; uint32_t totalSec; uint32_t remainingSec;
   uint8_t autoRestart; uint8_t active;
 } TimerPacket;                                      // 0x04
@@ -124,36 +100,29 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
   uint8_t type; uint32_t dryRunMs;
-} ConfigPacket;                                     // 0x07  dry-run timeout
-
-typedef struct __attribute__((packed)) {
-  uint8_t type; char msg[59];
-} LogPacket;                                        // 0x03  Receiver→Sender
+} ConfigPacket;                                     // 0x07
 
 // ── ESP-NOW log forwarding ────────────────────────────────────────────────
-//  Sends a [RECV] tagged log line to the sender so it appears in /api/logs.
-//  Also always prints to local serial. Guard: only sends after ESP-NOW init.
 static bool g_espNowReady = false;
 
 static void sendLogToSender(const char* msg) {
-  Serial.println(msg);                    // always print locally
-  if (!g_espNowReady) return;             // ESP-NOW not yet up — skip send
-  LogPacket pkt;  pkt.type = 0x03;
+  Serial.println(msg);
+  if (!g_espNowReady) return;
+  LogPacket pkt; pkt.type = 0x03;
   strncpy(pkt.msg, msg, sizeof(pkt.msg) - 1);
   pkt.msg[sizeof(pkt.msg) - 1] = '\0';
   esp_now_send(BCAST_MAC, (uint8_t*)&pkt, sizeof(pkt));
 }
 
-// Helper for formatted messages (like printf)
 static void sendLogFmt(const char* fmt, ...) {
-  char buf[60];  va_list ap;
-  va_start(ap, fmt);  vsnprintf(buf, sizeof(buf), fmt, ap);  va_end(ap);
+  char buf[60]; va_list ap;
+  va_start(ap, fmt); vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
   sendLogToSender(buf);
 }
 
-// ── ACS712  (5A module, 3.3 V supply) ───────────────────────────────────
-static const float ACS_ZERO_V       = 1.65f;
-static const float ACS_SENS_V_PER_A = 0.122f;
+// ── ACS712  (5A module, 3.3 V supply) ────────────────────────────────────
+static const float ACS_ZERO_V        = 1.65f;
+static const float ACS_SENS_V_PER_A  = 0.122f;
 static const float CURRENT_RUN_THRESH = 0.10f;
 #define ACS_ALPHA     0.15f
 #define ACS_SAMPLE_MS 50UL
@@ -166,34 +135,22 @@ static const float CURRENT_RUN_THRESH = 0.10f;
 #define SERVO_BACK_MS 400UL
 
 // ── Timing constants ──────────────────────────────────────────────────────
-#define WATER_TIMEOUT_DEFAULT_MS 10000UL // default 10 s dry-run guard (was 30 s)
-#define WATER_LOST_DEBOUNCE_MS   2000UL  // sustained dry for 2 s triggers cut-off
-// Runtime dry-run timeout — updated via ConfigPacket (0x07) from app slider
+#define WATER_TIMEOUT_DEFAULT_MS 10000UL
+#define WATER_LOST_DEBOUNCE_MS   2000UL
 static uint32_t g_dryRunMs = WATER_TIMEOUT_DEFAULT_MS;
 #define STALL_TIMEOUT_MS         5000UL
 #define STATUS_INTERVAL_MS       1000UL
 #define TIMER_SAVE_MS           10000UL
 #define BLINK_MS                  150UL
 
-// ══════════════════════════════════════════════════════════════════════════
-//  Comms mode — receiver always listens on both; replies on last cmd source
-// ══════════════════════════════════════════════════════════════════════════
-enum CommsMode : uint8_t { MODE_LORA = 0, MODE_ESPNOW = 1 };
-static CommsMode g_lastCmdMode = MODE_LORA;  // which radio last delivered a command
-static bool      g_loraOk      = false;
-
-// ── MACRO (not a function) prevents arduino-cli preprocessor from generating
-//    a broken forward-prototype before CommsMode is in scope. ─────────────
-#define modeStr(m)  ((m) == MODE_LORA ? "LoRa" : "ESP-NOW")
-
 // ── Servo state machine ───────────────────────────────────────────────────
 enum class ServoState  : uint8_t { IDLE, PRESSING, RETURNING };
 enum class ServoIntent : uint8_t { NONE, STARTING, STOPPING  };
 
-static Servo       motorServo;
-static ServoState  servoState  = ServoState::IDLE;
-static ServoIntent servoIntent = ServoIntent::NONE;
-static unsigned long servoTimer = 0;
+static Servo         motorServo;
+static ServoState    servoState  = ServoState::IDLE;
+static ServoIntent   servoIntent = ServoIntent::NONE;
+static unsigned long servoTimer  = 0;
 
 // ── Motor / command state ─────────────────────────────────────────────────
 static volatile bool     g_pendingOn  = false;
@@ -207,7 +164,7 @@ static uint8_t           g_queuedCmd  = 0;  // 0=none 1=ON 2=OFF
 static bool          g_waterCheckActive = false;
 static unsigned long g_waterCheckStart  = 0;
 static bool          g_waterDetected    = false;
-static unsigned long g_waterLostMs      = 0;  // when dry condition first detected mid-run
+static unsigned long g_waterLostMs      = 0;
 
 // ── ACS712 EMA ────────────────────────────────────────────────────────────
 static float         g_currentSmooth = 0.0f;
@@ -225,18 +182,18 @@ static unsigned long g_lastStatusMs = 0;
 static unsigned long g_blinkUntil = 0;
 
 // ── Timer state ───────────────────────────────────────────────────────────
-static bool          g_timerActive    = false;
-static uint32_t      g_timerTotal     = 0;
-static uint32_t      g_timerRemain    = 0;
-static bool          g_timerAutoRst   = false;
-static unsigned long g_timerLastTick  = 0;
+static bool          g_timerActive     = false;
+static uint32_t      g_timerTotal      = 0;
+static uint32_t      g_timerRemain     = 0;
+static bool          g_timerAutoRst    = false;
+static unsigned long g_timerLastTick   = 0;
 static unsigned long g_timerLastSaveMs = 0;
 
 // ── Schedule state ────────────────────────────────────────────────────────
 struct SchedEntry { uint8_t startH,startM,stopH,stopM,days,autoRestart,enabled,pad; };
-static uint8_t     g_schedCount = 0;
-static SchedEntry  g_scheds[8]  = {};
-static int         g_lastActedMinute = -1;
+static uint8_t       g_schedCount = 0;
+static SchedEntry    g_scheds[8]  = {};
+static int           g_lastActedMinute  = -1;
 static unsigned long g_schedLastCheckMs = 0;
 
 // ── RTC / epoch ───────────────────────────────────────────────────────────
@@ -262,10 +219,10 @@ static void eeSave() {
   EEPROM.write(EE_SCHED_COUNT, g_schedCount);
   for (uint8_t i = 0; i < 8; i++) {
     int b = EE_SCHED_BASE + i * 8;
-    EEPROM.write(b+0, g_scheds[i].startH);    EEPROM.write(b+1, g_scheds[i].startM);
-    EEPROM.write(b+2, g_scheds[i].stopH);     EEPROM.write(b+3, g_scheds[i].stopM);
-    EEPROM.write(b+4, g_scheds[i].days);      EEPROM.write(b+5, g_scheds[i].autoRestart);
-    EEPROM.write(b+6, g_scheds[i].enabled);   EEPROM.write(b+7, 0);
+    EEPROM.write(b+0, g_scheds[i].startH);     EEPROM.write(b+1, g_scheds[i].startM);
+    EEPROM.write(b+2, g_scheds[i].stopH);      EEPROM.write(b+3, g_scheds[i].stopM);
+    EEPROM.write(b+4, g_scheds[i].days);       EEPROM.write(b+5, g_scheds[i].autoRestart);
+    EEPROM.write(b+6, g_scheds[i].enabled);    EEPROM.write(b+7, 0);
   }
   EEPROM.write(EE_MOTOR_WAS_ON, g_motorOn ? 1 : 0);
   EEPROM.commit();
@@ -283,10 +240,10 @@ static void eeLoad() {
   g_schedCount   = min((uint8_t)8, EEPROM.read(EE_SCHED_COUNT));
   for (uint8_t i = 0; i < 8; i++) {
     int b = EE_SCHED_BASE + i * 8;
-    g_scheds[i].startH    = EEPROM.read(b+0); g_scheds[i].startM    = EEPROM.read(b+1);
-    g_scheds[i].stopH     = EEPROM.read(b+2); g_scheds[i].stopM     = EEPROM.read(b+3);
-    g_scheds[i].days      = EEPROM.read(b+4); g_scheds[i].autoRestart = EEPROM.read(b+5);
-    g_scheds[i].enabled   = EEPROM.read(b+6);
+    g_scheds[i].startH      = EEPROM.read(b+0); g_scheds[i].startM      = EEPROM.read(b+1);
+    g_scheds[i].stopH       = EEPROM.read(b+2); g_scheds[i].stopM       = EEPROM.read(b+3);
+    g_scheds[i].days        = EEPROM.read(b+4); g_scheds[i].autoRestart = EEPROM.read(b+5);
+    g_scheds[i].enabled     = EEPROM.read(b+6);
   }
   bool motorWasOn = EEPROM.read(EE_MOTOR_WAS_ON) != 0;
   Serial.printf("[RECV] EEPROM  timer=%lus(%s)  sched=%d  motorWasOn=%d\n",
@@ -311,23 +268,7 @@ static void updateCurrentEMA(unsigned long now) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Comms helpers — LoRa + ESP-NOW unified send
-// ══════════════════════════════════════════════════════════════════════════
-
-// Send on the specified mode (falls back to ESP-NOW if LoRa unavailable)
-static void commsSend(uint8_t* data, size_t len, CommsMode mode) {
-  if (mode == MODE_LORA && g_loraOk) {
-    LoRa.beginPacket();
-    LoRa.write(data, len);
-    LoRa.endPacket();  // blocking
-    LoRa.receive();    // back to RX_CONTINUOUS immediately
-  } else {
-    esp_now_send(BCAST_MAC, data, len);
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  Status broadcast — always sent on g_lastCmdMode (tracks sender's radio)
+//  Status broadcast via ESP-NOW
 // ══════════════════════════════════════════════════════════════════════════
 
 static void sendStatusNow() {
@@ -338,42 +279,37 @@ static void sendStatusNow() {
   pkt.waterOk = (g_waterDetected || !g_waterCheckActive) ? 1 : 0;
   pkt.stall   = g_stallDetected ? 1 : 0;
   pkt.seq     = ++g_statusSeq;
-  commsSend((uint8_t*)&pkt, sizeof(pkt), g_lastCmdMode);
+  esp_now_send(BCAST_MAC, (uint8_t*)&pkt, sizeof(pkt));
   g_lastStatusMs = millis();
 }
 
 static void sendStatusPeriodic(unsigned long now) {
   if (now - g_lastStatusMs < STATUS_INTERVAL_MS) return;
   sendStatusNow();
-  Serial.printf("[RECV] I=%.2fA  relay=%d  water=%s  stall=%d  timer=%lus  via=%s\n",
+  Serial.printf("[RECV] I=%.2fA  relay=%d  water=%s  stall=%d  timer=%lus\n",
     g_currentSmooth, (int)g_motorOn,
     g_waterDetected ? "OK" : (g_waterCheckActive ? "WAIT" : "IDLE"),
-    (int)g_stallDetected, (unsigned long)g_timerRemain, modeStr(g_lastCmdMode));
+    (int)g_stallDetected, (unsigned long)g_timerRemain);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 //  Motor helpers
 // ══════════════════════════════════════════════════════════════════════════
 
-static void deactivateMotor();  // forward declaration
+static void deactivateMotor();
 
 static void activateMotor() {
   if (servoState != ServoState::IDLE || g_motorOn) return;
-
-  // ── Water guard: block start if sensor reads HIGH (dry) ──────────────
-  // PIN_WATER uses INPUT_PULLUP: HIGH = no water, LOW = water present.
-  // If the sensor is disconnected it reads HIGH (safe — won't run dry).
   if (digitalRead(PIN_WATER) == HIGH) {
     sendLogToSender("[RECV] ✗ WATER GUARD — no water, start BLOCKED");
     g_waterDetected = false;
     sendStatusNow();
     return;
   }
-
   servoIntent = ServoIntent::STARTING;
   motorServo.write(SERVO_START);
   servoState = ServoState::PRESSING; servoTimer = millis();
-  Serial.println("[RECV] servo→0° (START; relay fires after hold)");
+  Serial.println("[RECV] servo→0° (START)");
 }
 
 static void deactivateMotor() {
@@ -382,7 +318,7 @@ static void deactivateMotor() {
   motorServo.write(SERVO_STOP);
   servoState = ServoState::PRESSING; servoTimer = millis();
   g_waterCheckActive = false; g_waterDetected = false; g_waterLostMs = 0;
-  Serial.println("[RECV] servo→180° (STOP; relay cuts after hold)");
+  Serial.println("[RECV] servo→180° (STOP)");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -414,7 +350,6 @@ static void handleServo(unsigned long now) {
         servoState = ServoState::RETURNING; servoTimer = now;
       }
       break;
-
     case ServoState::RETURNING:
       if (now - servoTimer >= SERVO_BACK_MS) {
         servoState = ServoState::IDLE; servoIntent = ServoIntent::NONE;
@@ -423,28 +358,19 @@ static void handleServo(unsigned long now) {
         else if (g_queuedCmd == 2) { g_queuedCmd = 0; deactivateMotor(); }
       }
       break;
-
     default: break;
   }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Water sensor — start guard + 10 s timeout + continuous dry-run detection
+//  Water sensor — start guard + timeout + continuous dry-run detection
 // ══════════════════════════════════════════════════════════════════════════
 
 static void handleWaterSensor(unsigned long now) {
-  if (!g_motorOn) {
-    // Motor off: nothing to guard
-    g_waterLostMs = 0;
-    return;
-  }
-
+  if (!g_motorOn) { g_waterLostMs = 0; return; }
   bool waterPresent = (digitalRead(PIN_WATER) == LOW);  // LOW = water ✔
-
   if (!g_waterDetected) {
-    // ── Phase 1: waiting for initial water confirmation after relay fires ─
     if (!g_waterCheckActive) return;
-
     if (waterPresent) {
       g_waterDetected    = true;
       g_waterCheckActive = false;
@@ -453,7 +379,6 @@ static void handleWaterSensor(unsigned long now) {
       sendStatusNow();
       return;
     }
-    // Dry for too long → cut off (10 s)
     if (now - g_waterCheckStart >= g_dryRunMs) {
       sendLogToSender("[RECV] ✗ WATER TIMEOUT 10s — auto cut-off");
       g_waterCheckActive = false;
@@ -461,16 +386,12 @@ static void handleWaterSensor(unsigned long now) {
       else                                g_queuedCmd = 2;
       sendStatusNow();
     }
-
   } else {
-    // ── Phase 2: water was confirmed — monitor for mid-run dry condition ──
     if (!waterPresent) {
-      // Water disappeared — start debounce timer
       if (g_waterLostMs == 0) {
         g_waterLostMs = now;
         Serial.println("[RECV] ⚠ water lost — debouncing...");
       } else if (now - g_waterLostMs >= WATER_LOST_DEBOUNCE_MS) {
-        // Sustained dry for 2 s → cut off to prevent dry running
         sendLogToSender("[RECV] ✗ WATER LOST 2s — dry-run guard — cut-off");
         g_waterDetected = false;
         g_waterLostMs   = 0;
@@ -479,7 +400,6 @@ static void handleWaterSensor(unsigned long now) {
         sendStatusNow();
       }
     } else {
-      // Water back — reset the lost-water debounce
       if (g_waterLostMs != 0) {
         g_waterLostMs = 0;
         Serial.println("[RECV] water restored");
@@ -562,23 +482,22 @@ static void handleScheduler(unsigned long now) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Shared packet processor — called by both ESP-NOW callback and LoRa poll
+//  Packet processor (ESP-NOW only)
 // ══════════════════════════════════════════════════════════════════════════
 
-static void processPacket(uint8_t* data, uint8_t len, CommsMode src) {
+static void processPacket(uint8_t* data, uint8_t len) {
   if (len < 1) return;
   switch (data[0]) {
     case 0x01: {
       if (len < sizeof(CmdPacket)) return;
       CmdPacket pkt; memcpy(&pkt, data, sizeof(pkt));
       if (pkt.seq == g_lastSeq) return;   // duplicate filter
-      g_lastSeq     = pkt.seq;
-      g_lastCmdMode = src;  // reply on same radio this command arrived on
-      g_rxFlag      = true;
+      g_lastSeq = pkt.seq;
+      g_rxFlag  = true;
       if (pkt.cmd == 0x01) g_pendingOn  = true;
       if (pkt.cmd == 0x02) g_pendingOff = true;
-      Serial.printf("[RECV] cmd %s  seq=%lu  via %s\n",
-                    pkt.cmd==0x01?"ON":"OFF", (unsigned long)pkt.seq, modeStr(src));
+      Serial.printf("[RECV] cmd %s  seq=%lu\n",
+                    pkt.cmd==0x01?"ON":"OFF", (unsigned long)pkt.seq);
       break;
     }
     case 0x04: {
@@ -622,12 +541,11 @@ static void processPacket(uint8_t* data, uint8_t len, CommsMode src) {
       break;
     }
     case 0x07: {
-      // ConfigPacket — dry-run timeout update from app slider via sender
       if (len < sizeof(ConfigPacket)) return;
       ConfigPacket pkt; memcpy(&pkt, data, sizeof(pkt));
       if (pkt.dryRunMs >= 5000UL && pkt.dryRunMs <= 60000UL) {
         g_dryRunMs = pkt.dryRunMs;
-        sendLogFmt("[RECV] dry-run timeout updated → %lus", (unsigned long)(g_dryRunMs / 1000UL));
+        sendLogFmt("[RECV] dry-run timeout → %lus", (unsigned long)(g_dryRunMs / 1000UL));
       }
       break;
     }
@@ -642,20 +560,7 @@ static void processPacket(uint8_t* data, uint8_t len, CommsMode src) {
 void espnowOnSend(uint8_t*, uint8_t) { }
 
 void espnowOnRecv(uint8_t*, uint8_t* data, uint8_t len) {
-  processPacket(data, len, MODE_ESPNOW);
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  LoRa poll — called every loop iteration (polling mode, no interrupt)
-// ══════════════════════════════════════════════════════════════════════════
-
-static void loraPoll() {
-  if (!g_loraOk) return;
-  int sz = LoRa.parsePacket();
-  if (sz <= 0) return;
-  uint8_t buf[64]; int n = 0;
-  while (LoRa.available() && n < (int)sizeof(buf)) buf[n++] = LoRa.read();
-  if (n > 0) processPacket(buf, (uint8_t)n, MODE_LORA);
+  processPacket(data, len);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -663,30 +568,24 @@ static void loraPoll() {
 // ══════════════════════════════════════════════════════════════════════════
 
 void setup() {
-  // Relay OFF must be the very first thing
+  // Relay OFF must be first
   pinMode(PIN_RELAY, OUTPUT);
   digitalWrite(PIN_RELAY, LOW);
 
   Serial.begin(115200);
   delay(100);
-  Serial.println("\n[RECV] boot v3  LoRa+ESP-NOW");
+  Serial.println("\n[RECV] boot v4  ESP-NOW only");
 
   pinMode(PIN_LED, OUTPUT); digitalWrite(PIN_LED, HIGH);  // off (active LOW)
 
-  // ── Water sensor: INPUT_PULLUP ────────────────────────────────────────
-  // CRITICAL FIX: was INPUT (floating when dry → random reads).
-  // INPUT_PULLUP: disconnected/dry → HIGH (no water, safe).
-  // Sensor grounds the pin when water present → LOW (water detected).
   pinMode(PIN_WATER, INPUT_PULLUP);
   Serial.printf("[RECV] water at boot: %s\n",
                 digitalRead(PIN_WATER) == LOW ? "WET (LOW)" : "DRY (HIGH)");
 
-  // Servo
   motorServo.attach(PIN_SERVO, 500, 2400);
   motorServo.write(SERVO_NEUTRAL);
   delay(500); Serial.println("[RECV] servo @ 90°");
 
-  // EEPROM
   EEPROM.begin(EE_SIZE);
   eeLoad();
 
@@ -695,12 +594,12 @@ void setup() {
   delay(400);
   for (int i = 0; i < 3; i++) { digitalWrite(PIN_LED,LOW);delay(300);digitalWrite(PIN_LED,HIGH);delay(300); }
 
-  // ── Wi-Fi STA (for ESP-NOW channel sync) ─────────────────────────────
+  // ── Wi-Fi STA — join sender AP for channel sync ───────────────────────
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.begin(AP_SSID, AP_PASS);
-  WiFi.setOutputPower(20.5f);
-  wifi_set_phy_mode(PHY_MODE_11B);
+  WiFi.setOutputPower(20.5f);       // max power: 20.5 dBm
+  wifi_set_phy_mode(PHY_MODE_11B);  // 802.11b for best range
   Serial.print("[RECV] AP connect");
   unsigned long t = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t < AP_TIMEOUT) { delay(200); Serial.print('.'); }
@@ -711,26 +610,7 @@ void setup() {
     WiFi.disconnect(); wifi_set_channel(WIFI_CH);
   }
 
-  // ── LoRa init ─────────────────────────────────────────────────────────
-  // SPI uses D5/D6/D7 (hardware SPI defaults on ESP8266) — no SPI.begin() needed.
-  // DIO0 = D4 = built-in LED pin — do NOT wire DIO0 here; we poll instead.
-  LoRa.setPins(LORA_NSS, LORA_RST, LORA_DIO0);  // DIO0 stored but never used as IRQ
-  if (!LoRa.begin(433E6)) {
-    Serial.println("[LORA] init FAILED — no hardware? ESP-NOW only");
-    g_loraOk      = false;
-    g_lastCmdMode = MODE_ESPNOW;
-  } else {
-    LoRa.setTxPower(17);
-    LoRa.setSpreadingFactor(7);      // SF7 fast; match sender setting
-    LoRa.setSignalBandwidth(125E3);
-    LoRa.setCodingRate4(5);
-    LoRa.setSyncWord(0xAB);          // must match sender
-    LoRa.receive();                  // RX_CONTINUOUS; loraPoll() checks each loop
-    g_loraOk = true;
-    Serial.println("[LORA] init OK  433 MHz  SF7  BW125  sync=0xAB");
-  }
-
-  // ── ESP-NOW (3 retries) ───────────────────────────────────────────────
+  // ── ESP-NOW init (3 retries) ─────────────────────────────────────────
   int tries = 3;
   while (esp_now_init() != 0 && tries-- > 0) { Serial.println("[RECV] ESP-NOW retry"); delay(500); }
   if (tries < 0) { Serial.println("[RECV] ESP-NOW FAILED — reboot"); delay(1000); ESP.restart(); }
@@ -738,10 +618,10 @@ void setup() {
   esp_now_register_send_cb(espnowOnSend);
   esp_now_register_recv_cb(espnowOnRecv);
   esp_now_add_peer(BCAST_MAC, ESP_NOW_ROLE_COMBO, WIFI_CH, nullptr, 0);
-  g_espNowReady = true;    // sendLogToSender() may now send packets
+  g_espNowReady = true;
 
   for (int i=0;i<3;i++){digitalWrite(PIN_LED,LOW);delay(80);digitalWrite(PIN_LED,HIGH);delay(80);}
-  sendLogFmt("[RECV] ready  %s + ESP-NOW",  g_loraOk ? "LoRa" : "ESP-NOW-only");
+  sendLogFmt("[RECV] ready  ESP-NOW only  power=20.5dBm  ch=1");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -752,9 +632,6 @@ void loop() {
   unsigned long now = millis();
 
   updateCurrentEMA(now);
-
-  // ── LoRa poll ─────────────────────────────────────────────────────────
-  loraPoll();
 
   // ── LED blink on RX ──────────────────────────────────────────────────
   if (g_rxFlag) { g_rxFlag = false; g_blinkUntil = now + BLINK_MS; digitalWrite(PIN_LED, LOW); }

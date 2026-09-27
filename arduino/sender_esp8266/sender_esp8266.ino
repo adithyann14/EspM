@@ -1,72 +1,41 @@
 /**
  * ════════════════════════════════════════════════════════════════════════
- *  SENDER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v3
+ *  SENDER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v4
+ *
+ *  Comms: ESP-NOW only.  Max TX power: 20.5 dBm, PHY 802.11b.
  *
  *  Wi-Fi AP "MotorControl" / "motor1234" — always up (ESP-NOW channel sync).
- *  Wi-Fi STA — joins home router so the app works on home WiFi without
- *              disconnecting from the router. Set creds at compile time
- *              via STA_SSID_DEFAULT/STA_PASS_DEFAULT, or at runtime via
- *              POST /api/wifi/config.
+ *  Wi-Fi STA — joins home router so the app works on home WiFi.
+ *              Set creds via STA_SSID_DEFAULT/STA_PASS_DEFAULT or
+ *              POST /api/wifi/config at runtime.
  *
- *  Comms: LoRa primary → ESP-NOW fallback (auto-switch after 10 s no RX)
- *         If ESP-NOW also fails 10 s → back to LoRa → repeat.
- *         Both radios always RX simultaneously; only TX mode alternates.
+ *  ── Pins ──────────────────────────────────────────────────────────────
+ *  D1 (GPIO5)  → Button ON  (INPUT_PULLUP)
+ *  D2 (GPIO4)  → Button OFF (INPUT_PULLUP)
+ *  D3 (GPIO0)  → LED ON  (green)
+ *  GPIO3 / RX  → LED OFF (red)
  *
- *  ── LoRa Ra-02 SX1278 wiring ─────────────────────────────────────────
- *  VCC  → 3.3V  ⚠ add 100µF electrolytic + 100nF ceramic to GND at module
- *  GND  → GND
- *  RST  → D0
- *  NSS  → D8   ⚠ add 10kΩ pull-up resistor from D8 to 3.3V rail
- *  MOSI → D7
- *  MISO → D6
- *  SCK  → D5
- *  DIO0 → leave UNCONNECTED (polling mode; no interrupt used)
- *           optionally solder 100kΩ pull-down from DIO0 pad to GND
- *  ANT  → 17.3 cm wire (mandatory — transmit without antenna damages PA)
- *
- *  No level shifter needed (ESP8266 is 3.3V native).
- *
- *  ── ESP-NOW packet types (unchanged) ─────────────────────────────────
- *  0x01 CmdPacket    Sender→Receiver  (ON/OFF)
- *  0x02 StatusPacket Receiver→Sender  (current, motorOn, waterOk, stall)
- *  0x03 LogPacket    Receiver→Sender  (log forwarding)
- *  0x04 TimerPacket  Sender→Receiver
- *  0x05 SchedPacket  Sender→Receiver
- *  0x06 TimeSyncPacket Sender→Receiver
- *
- *  ── REST endpoints (all unchanged) ───────────────────────────────────
- *  GET  /api/status        → motorOn, current, waterOk, stall, linkOk,
- *                            commsMode, staIp (null when STA not connected)
+ *  ── REST endpoints ────────────────────────────────────────────────────
+ *  GET  /api/status
  *  POST /api/motor/on|off
  *  GET  /api/logs
- *  POST /api/timer/set|cancel  GET /api/timer/status
+ *  POST /api/timer/set|cancel   GET /api/timer/status
  *  POST /api/schedule/push|clear
  *  POST /api/time/sync
- *  POST /api/config/drytimeout  {dryRunSec:5-60}
- *  POST /api/wifi/config        {ssid,pass}  → save STA creds to EEPROM
- *  GET  /api/wifi/status        → {staConnected,staIp,apIp,staSSID}
+ *  POST /api/config/drytimeout   {dryRunSec:5-60}
+ *  POST /api/wifi/config         {ssid,pass}
+ *  GET  /api/wifi/status
  * ════════════════════════════════════════════════════════════════════════
  */
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
-#include <SPI.h>
-#include <LoRa.h>
 
 extern "C" {
   #include <espnow.h>
   #include <user_interface.h>
 }
-
-// ── LoRa SX1278 pins ─────────────────────────────────────────────────────
-#define LORA_RST  D0   // GPIO16
-#define LORA_NSS  D8   // GPIO15  ← add 10kΩ pull-up to 3.3V on breadboard
-#define LORA_SCK  D5   // GPIO14  hardware SPI
-#define LORA_MISO D6   // GPIO12  hardware SPI
-#define LORA_MOSI D7   // GPIO13  hardware SPI
-#define LORA_DIO0 D4   // GPIO2   defined but NOT connected (polling mode)
-//                                Leave DIO0 pad floating or add 100kΩ to GND
 
 // ── Pins ──────────────────────────────────────────────────────────────────
 #define PIN_BTN_ON   D1   // GPIO5
@@ -80,20 +49,18 @@ static const char*   AP_PASS = "motor1234";
 static const uint8_t WIFI_CH = 1;
 
 // ── Wi-Fi STA (home router) ───────────────────────────────────────────────
-// Compile-time defaults: define before #include or via -D flag in build.
-// Leave "" to rely only on EEPROM creds set via /api/wifi/config.
 #ifndef STA_SSID_DEFAULT
-  #define STA_SSID_DEFAULT ""   // e.g. "MyHomeWiFi"
+  #define STA_SSID_DEFAULT ""
 #endif
 #ifndef STA_PASS_DEFAULT
-  #define STA_PASS_DEFAULT ""   // e.g. "password123"
+  #define STA_PASS_DEFAULT ""
 #endif
 static char g_staSSID[33] = STA_SSID_DEFAULT;
 static char g_staPass[33] = STA_PASS_DEFAULT;
 static bool g_staConnected = false;
 
 // ── EEPROM ────────────────────────────────────────────────────────────────
-#define EE_SIZE          200          // expanded: +72 bytes for STA creds
+#define EE_SIZE          200
 #define EE_MAGIC         0
 #define EE_TIMER_TOTAL   1
 #define EE_TIMER_AUTO    5
@@ -104,10 +71,9 @@ static bool g_staConnected = false;
 #define EE_SCHED_COUNT   16
 #define EE_SCHED_BASE    17
 #define EE_MOTOR_WAS_ON  81
-// ── STA credential store ─────────────────────────────────────────────────
-#define EE_STA_MAGIC     82   // 0xCA = valid creds present
-#define EE_STA_SSID      83   // 33 bytes: 32 chars + NUL  (83-115)
-#define EE_STA_PASS     116   // 33 bytes: 32 chars + NUL  (116-148)
+#define EE_STA_MAGIC     82
+#define EE_STA_SSID      83
+#define EE_STA_PASS     116
 #define EE_STA_MAGIC_VAL 0xCA
 #define EE_MAGIC_VAL     0xBE
 
@@ -144,19 +110,6 @@ static void logFmt(const char* fmt, ...) {
   logAdd(buf);
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-//  Comms mode — LoRa primary, ESP-NOW fallback
-// ══════════════════════════════════════════════════════════════════════════
-enum CommsMode : uint8_t { MODE_LORA = 0, MODE_ESPNOW = 1 };
-static CommsMode      g_txMode    = MODE_LORA;
-static bool           g_loraOk   = false;
-static unsigned long  g_lastRxMs = 0;   // last packet from receiver, either radio
-#define COMMS_TIMEOUT_MS 10000UL
-
-// ── MACRO (not a function) prevents arduino-cli preprocessor from generating
-//    a broken forward-prototype before CommsMode is in scope. ─────────────
-#define modeStr(m)  ((m) == MODE_LORA ? "LoRa" : "ESP-NOW")
-
 // ── ESP-NOW packets ────────────────────────────────────────────────────────
 static uint8_t BCAST_MAC[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
@@ -189,7 +142,7 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
   uint8_t type; uint32_t dryRunMs;
-} ConfigPacket;                                     // 0x07  dry-run timeout
+} ConfigPacket;                                     // 0x07
 
 // ── Motor / sensor state ──────────────────────────────────────────────────
 static bool           g_motorOn  = false;
@@ -198,6 +151,13 @@ static volatile bool  g_waterOk  = true;
 static volatile bool  g_stall    = false;
 static uint32_t       g_cmdSeq   = 0;
 static bool           g_linkLost = true;
+static unsigned long  g_lastRxMs = 0;
+
+// ── ESP-NOW RSSI (promiscuous sniffer) ────────────────────────────────────
+static volatile int8_t  g_lastRssi       = 0;
+static volatile bool    g_hasRssi        = false;
+static uint8_t          g_receiverMac[6] = {0};
+static bool             g_receiverMacKnown = false;
 
 // ── Button debounce ────────────────────────────────────────────────────────
 static uint8_t       g_btnOnState  = 0, g_btnOffState = 0;
@@ -207,16 +167,16 @@ static unsigned long g_btnOnMs     = 0, g_btnOffMs    = 0;
 // ── LEDs ──────────────────────────────────────────────────────────────────
 #define BLINK_ON_MS   80UL
 #define BLINK_OFF_MS 120UL
-static volatile bool g_blinkReq    = false;
+static volatile bool g_blinkReq     = false;
 static unsigned long g_blinkPhaseMs = 0;
 static uint8_t       g_blinkPhase   = 0;
 
 // ── Timer state ───────────────────────────────────────────────────────────
-static bool          g_timerActive    = false;
-static uint32_t      g_timerTotal     = 0;
-static uint32_t      g_timerRemain    = 0;
-static bool          g_timerAutoRst   = false;
-static unsigned long g_timerLastTick  = 0;
+static bool          g_timerActive     = false;
+static uint32_t      g_timerTotal      = 0;
+static uint32_t      g_timerRemain     = 0;
+static bool          g_timerAutoRst    = false;
+static unsigned long g_timerLastTick   = 0;
 static unsigned long g_timerLastSaveMs = 0;
 #define TIMER_SAVE_INTERVAL_MS 10000UL
 
@@ -241,7 +201,7 @@ static uint8_t epochDayBit(uint32_t e) {
 // ── HTTP server ────────────────────────────────────────────────────────────
 static ESP8266WebServer server(80);
 
-// Forward declarations (needed because eeLoad() calls them)
+// Forward declarations
 static void sendMotorCommandInternal(bool on);
 static void sendTimerPacket();
 static void updateLEDs();
@@ -284,10 +244,10 @@ static void eeLoad() {
   g_schedCount   = min((uint8_t)8, EEPROM.read(EE_SCHED_COUNT));
   for (uint8_t i = 0; i < 8; i++) {
     int b = EE_SCHED_BASE + i * 8;
-    g_scheds[i].startH    = EEPROM.read(b+0); g_scheds[i].startM    = EEPROM.read(b+1);
-    g_scheds[i].stopH     = EEPROM.read(b+2); g_scheds[i].stopM     = EEPROM.read(b+3);
-    g_scheds[i].days      = EEPROM.read(b+4); g_scheds[i].autoRestart = EEPROM.read(b+5);
-    g_scheds[i].enabled   = EEPROM.read(b+6);
+    g_scheds[i].startH      = EEPROM.read(b+0); g_scheds[i].startM      = EEPROM.read(b+1);
+    g_scheds[i].stopH       = EEPROM.read(b+2); g_scheds[i].stopM       = EEPROM.read(b+3);
+    g_scheds[i].days        = EEPROM.read(b+4); g_scheds[i].autoRestart = EEPROM.read(b+5);
+    g_scheds[i].enabled     = EEPROM.read(b+6);
   }
   bool motorWasOn = EEPROM.read(EE_MOTOR_WAS_ON) != 0;
   logFmt("[SEND] EEPROM loaded  timer=%lus(%s)  scheds=%d  motorWasOn=%d",
@@ -302,8 +262,6 @@ static void eeLoad() {
   if (motorWasOn && g_timerAutoRst) sendMotorCommandInternal(true);
 }
 
-// ── STA credential EEPROM helpers ────────────────────────────────────────
-
 static void eeSaveStaCreds() {
   for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_SSID + i, (uint8_t)g_staSSID[i]);
   for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_PASS + i, (uint8_t)g_staPass[i]);
@@ -314,7 +272,6 @@ static void eeSaveStaCreds() {
 
 static void eeLoadStaCreds() {
   if (EEPROM.read(EE_STA_MAGIC) != EE_STA_MAGIC_VAL) {
-    // No EEPROM creds — compile-time defaults already in g_staSSID/g_staPass
     if (g_staSSID[0]) logFmt("[WIFI] compile-time STA SSID='%s'", g_staSSID);
     else              logAdd("[WIFI] No STA creds — AP-only mode (192.168.4.1)");
     return;
@@ -327,37 +284,17 @@ static void eeLoadStaCreds() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Comms helpers — unified LoRa / ESP-NOW send + LoRa poll
+//  ESP-NOW send (always broadcast)
 // ══════════════════════════════════════════════════════════════════════════
 
-// Send raw bytes on the current TX mode
 static void commsSend(uint8_t* data, size_t len) {
-  if (g_txMode == MODE_LORA && g_loraOk) {
-    LoRa.beginPacket();
-    LoRa.write(data, len);
-    LoRa.endPacket();  // blocking (~20 ms at SF7/BW125)
-    LoRa.receive();    // return to RX_CONTINUOUS immediately
-  } else {
-    esp_now_send(BCAST_MAC, data, len);
-  }
+  esp_now_send(BCAST_MAC, data, len);
 }
 
-// Switch TX mode; reset the watchdog window so new mode gets 10 s
-static void switchCommsMode() {
-  if (!g_loraOk) {
-    // LoRa hardware absent — stay on ESP-NOW, just reset window
-    logAdd("[COMMS] LoRa unavailable — staying on ESP-NOW");
-    g_lastRxMs = millis();
-    return;
-  }
-  CommsMode prev = g_txMode;
-  g_txMode   = (g_txMode == MODE_LORA) ? MODE_ESPNOW : MODE_LORA;
-  g_lastRxMs = millis();  // new mode gets fresh 10 s window
-  logFmt("[COMMS] no RX for 10 s on %s — switching to %s",
-         modeStr(prev), modeStr(g_txMode));
-}
+// ══════════════════════════════════════════════════════════════════════════
+//  Incoming packet handler
+// ══════════════════════════════════════════════════════════════════════════
 
-// Shared packet handler — called by both LoRa poll and ESP-NOW callback
 static void processIncomingPacket(uint8_t* data, int len) {
   if (len < 1) return;
   switch (data[0]) {
@@ -365,7 +302,6 @@ static void processIncomingPacket(uint8_t* data, int len) {
       if (len < (int)sizeof(StatusPacket)) return;
       StatusPacket pkt; memcpy(&pkt, data, sizeof(pkt));
 
-      // Snapshot before update — detect state transitions for debug logging
       bool prevMotor = g_motorOn;
       bool prevWater = g_waterOk;
       bool prevStall = g_stall;
@@ -378,7 +314,6 @@ static void processIncomingPacket(uint8_t* data, int len) {
       g_linkLost = false;
       g_blinkReq = true;
 
-      // ── Debug: log state transitions received from receiver ─────────────
       if (prevMotor != g_motorOn)
         logFmt("[RECV] relay → %s  I=%.2fA", g_motorOn ? "ON" : "OFF", g_currentA);
       if (prevWater != g_waterOk)
@@ -402,16 +337,6 @@ static void processIncomingPacket(uint8_t* data, int len) {
     }
     default: break;
   }
-}
-
-// Poll LoRa RX in the main loop (no interrupt — pure SPI register poll)
-static void loraPoll() {
-  if (!g_loraOk) return;
-  int sz = LoRa.parsePacket();
-  if (sz <= 0) return;
-  uint8_t buf[64]; int n = 0;
-  while (LoRa.available() && n < (int)sizeof(buf)) buf[n++] = LoRa.read();
-  if (n > 0) processIncomingPacket(buf, n);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -439,7 +364,7 @@ static void handleBlink() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Packet send helpers — all route through commsSend()
+//  Packet send helpers
 // ══════════════════════════════════════════════════════════════════════════
 
 static void sendTimerPacket() {
@@ -476,13 +401,32 @@ static void sendTimeSyncPacket() {
 static void sendMotorCommandInternal(bool on) {
   CmdPacket pkt;
   pkt.type = 0x01; pkt.cmd = on ? 0x01 : 0x02; pkt.seq = ++g_cmdSeq;
-  logFmt("[SEND] Motor %s  seq=%lu  via %s",
-         on ? "ON" : "OFF", (unsigned long)g_cmdSeq, modeStr(g_txMode));
-  // Send 3× for reliability (LoRa is point-to-point so 1 usually suffices;
-  // ESP-NOW broadcast benefits from retries)
+  logFmt("[SEND] Motor %s  seq=%lu  via ESP-NOW",
+         on ? "ON" : "OFF", (unsigned long)g_cmdSeq);
+  // 3× retries for broadcast reliability
   for (uint8_t i = 0; i < 3; i++) { commsSend((uint8_t*)&pkt, sizeof(pkt)); delay(12); }
   EEPROM.write(EE_MOTOR_WAS_ON, on ? 1 : 0);
   EEPROM.commit();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  Promiscuous sniffer — captures RSSI of ESP-NOW frames from receiver
+// ══════════════════════════════════════════════════════════════════════════
+
+// ESP8266 rx_ctrl is 12 bytes; first byte is signed RSSI.
+struct PktRxCtrl_t { int8_t rssi; uint8_t pad[11]; };
+
+static void ICACHE_FLASH_ATTR rssiSnifferCb(uint8_t *buf, uint16_t len) {
+  // buf = [PktRxCtrl_t(12)] + [802.11 frame]
+  // Management Action frames (which ESP-NOW uses):
+  //   FC(2) DUR(2) DA(6) SA(6) BSSID(6) SEQ(2) ...
+  //   Source MAC (SA) starts at offset 12+10 = 22 within buf
+  if (len < 28 || !g_receiverMacKnown) return;
+  const uint8_t *sa = buf + 22;
+  if (memcmp(sa, g_receiverMac, 6) != 0) return;
+  const PktRxCtrl_t *ctrl = (const PktRxCtrl_t *)buf;
+  g_lastRssi = ctrl->rssi;
+  g_hasRssi  = true;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -491,9 +435,12 @@ static void sendMotorCommandInternal(bool on) {
 
 void espnowOnSend(uint8_t* /*mac*/, uint8_t /*status*/) { }
 
-void espnowOnRecv(uint8_t* /*mac*/, uint8_t* data, uint8_t len) {
-  // ESP-NOW can receive status even while TX mode is LoRa — that's fine.
-  // Both radios always receive; only TX alternates.
+void espnowOnRecv(uint8_t* mac, uint8_t* data, uint8_t len) {
+  // Save receiver MAC on first ESP-NOW packet so the sniffer can filter for it
+  if (!g_receiverMacKnown && mac != nullptr) {
+    memcpy(g_receiverMac, mac, 6);
+    g_receiverMacKnown = true;
+  }
   processIncomingPacket(data, (int)len);
 }
 
@@ -503,7 +450,7 @@ void espnowOnRecv(uint8_t* /*mac*/, uint8_t* data, uint8_t len) {
 
 static void handleTimerTick() {
   if (!g_timerActive) return;
-  unsigned long now = millis();
+  unsigned long now     = millis();
   unsigned long elapsed = (now - g_timerLastTick) / 1000UL;
   if (elapsed == 0) return;
   g_timerLastTick = now - ((now - g_timerLastTick) % 1000UL);
@@ -523,7 +470,7 @@ static void handleTimerTick() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Scheduler tick (checked every 15 s, acts once per minute)
+//  Scheduler tick
 // ══════════════════════════════════════════════════════════════════════════
 
 static unsigned long g_schedLastCheckMs = 0;
@@ -548,7 +495,7 @@ static void handleScheduler() {
       sendMotorCommandInternal(true);  g_lastActedMinute = (int)tod; break;
     }
     if (tod == stopTod) {
-      logFmt("[SCHED] slot %d → OFF (%02d:%02d)", (int)i, (int)s.stopH,  (int)s.stopM);
+      logFmt("[SCHED] slot %d → OFF (%02d:%02d)", (int)i, (int)s.stopH, (int)s.stopM);
       sendMotorCommandInternal(false); g_lastActedMinute = (int)tod; break;
     }
   }
@@ -576,11 +523,16 @@ static String buildStatusJson() {
   j += "\"waterOk\":"    + String(g_waterOk  ? "true":"false") + ",";
   j += "\"stall\":"      + String(g_stall    ? "true":"false") + ",";
   j += "\"linkOk\":"     + String(isLinkOk() ? "true":"false") + ",";
-  j += "\"commsMode\":\"" + String(modeStr(g_txMode)) + "\",";
+  j += "\"commsMode\":\"ESP-NOW\",";
   if (g_staConnected && WiFi.status() == WL_CONNECTED)
-    j += "\"staIp\":\"" + WiFi.localIP().toString() + "\"";
+    j += "\"staIp\":\"" + WiFi.localIP().toString() + "\",";
   else
-    j += "\"staIp\":null";
+    j += "\"staIp\":null,";
+  // MODULE E: ESP-NOW RSSI from promiscuous sniffer (dBm, negative values)
+  if (g_hasRssi)
+    j += "\"rssi\":" + String((int)g_lastRssi);
+  else
+    j += "\"rssi\":null";
   j += "}";
   return j;
 }
@@ -593,11 +545,9 @@ void handleAlerts()      { addCorsHeaders(); server.send(200,"application/json",
 void handleAlertsClear() { addCorsHeaders(); server.send(200,"application/json","{\"success\":true}"); }
 void handleNotFound()    { server.send(404,"application/json","{\"error\":\"not found\"}"); }
 
-// ── /api/wifi/config — POST {"ssid":"…","pass":"…"} ──────────────────────
 void handleWifiConfig() {
   addCorsHeaders();
   String body = server.arg("plain");
-  // Extract first string value after a key in the JSON body
   auto extractStr = [&](const char* key) -> String {
     int ki = body.indexOf(key); if (ki < 0) return "";
     int q1 = body.indexOf('"', ki + strlen(key));
@@ -614,18 +564,16 @@ void handleWifiConfig() {
   ssid.toCharArray(g_staSSID, sizeof(g_staSSID));
   pass.toCharArray(g_staPass, sizeof(g_staPass));
   eeSaveStaCreds();
-  // Connect immediately (non-blocking — result visible via /api/wifi/status)
   WiFi.begin(g_staSSID, g_staPass);
   logFmt("[WIFI] STA: connecting to '%s'…", g_staSSID);
   addCorsHeaders();
   server.send(200,"application/json","{\"success\":true,\"message\":\"Connecting — poll /api/wifi/status in 10s\"}");
 }
 
-// ── /api/wifi/status — GET ────────────────────────────────────────────────
 void handleWifiStatus() {
   addCorsHeaders();
   bool connected = (WiFi.status() == WL_CONNECTED);
-  String apIp   = WiFi.softAPIP().toString();
+  String apIp = WiFi.softAPIP().toString();
   String j = "{";
   j += "\"staConnected\":" + String(connected ? "true":"false") + ",";
   j += connected ? ("\"staIp\":\"" + WiFi.localIP().toString() + "\",") : "\"staIp\":null,";
@@ -656,9 +604,9 @@ void handleLogs() {
 }
 
 void handleTimerSet() {
-  String body = server.arg("plain");
-  int secIdx = body.indexOf("\"seconds\":");
-  int autIdx = body.indexOf("\"autoRestart\":");
+  String body   = server.arg("plain");
+  int    secIdx = body.indexOf("\"seconds\":");
+  int    autIdx = body.indexOf("\"autoRestart\":");
   if (secIdx < 0) { server.send(400,"application/json","{\"error\":\"missing seconds\"}"); return; }
   uint32_t sec = (uint32_t)body.substring(secIdx + 10).toInt();
   bool     ar  = (autIdx >= 0) && (body.substring(autIdx + 14).toInt() != 0);
@@ -690,9 +638,9 @@ void handleTimerStatus() {
 }
 
 void handleSchedPush() {
-  String body = server.arg("plain");
-  int cntIdx = body.indexOf("\"count\":");
-  int entIdx = body.indexOf("\"entries\":");
+  String body   = server.arg("plain");
+  int    cntIdx = body.indexOf("\"count\":");
+  int    entIdx = body.indexOf("\"entries\":");
   if (cntIdx < 0 || entIdx < 0) { server.send(400,"application/json","{\"error\":\"malformed\"}"); return; }
   g_schedCount = (uint8_t)min(8L, body.substring(cntIdx + 8).toInt());
   int pos = entIdx + 10;
@@ -704,7 +652,7 @@ void handleSchedPush() {
     };
     s.startH = rd("\"startH\":"); s.startM = rd("\"startM\":");
     s.stopH  = rd("\"stopH\":");  s.stopM  = rd("\"stopM\":");
-    s.days   = rd("\"days\":"); s.autoRestart = rd("\"autoRestart\":"); s.enabled = rd("\"enabled\":");
+    s.days = rd("\"days\":"); s.autoRestart = rd("\"autoRestart\":"); s.enabled = rd("\"enabled\":");
     pos = body.indexOf("{", pos + 1);
   }
   eeSave();
@@ -720,9 +668,9 @@ void handleSchedClear() {
 }
 
 void handleTimeSync() {
-  String body = server.arg("plain");
-  int epIdx  = body.indexOf("\"epoch\":");
-  int rtcIdx = body.indexOf("\"rtcEnabled\":");
+  String body   = server.arg("plain");
+  int    epIdx  = body.indexOf("\"epoch\":");
+  int    rtcIdx = body.indexOf("\"rtcEnabled\":");
   if (epIdx < 0) { server.send(400,"application/json","{\"error\":\"missing epoch\"}"); return; }
   g_epoch = (uint32_t)body.substring(epIdx + 8).toInt();
   g_epochMs = millis();
@@ -734,8 +682,6 @@ void handleTimeSync() {
 }
 
 void handleDryTimeout() {
-  // POST /api/config/drytimeout  body: {"dryRunSec":<int 5-60>}
-  // Forwards the app's dry-run slider to the receiver as a ConfigPacket (0x07).
   String body   = server.arg("plain");
   int    secIdx = body.indexOf("\"dryRunSec\":");
   if (secIdx < 0) {
@@ -756,7 +702,7 @@ void handleDryTimeout() {
 void setup() {
   Serial.begin(115200, SERIAL_8N1, SERIAL_TX_ONLY);
   delay(100);
-  logAdd("[SEND] boot v3  LoRa+ESP-NOW");
+  logAdd("[SEND] boot v4  ESP-NOW only");
 
   pinMode(PIN_BTN_ON,  INPUT_PULLUP);
   pinMode(PIN_BTN_OFF, INPUT_PULLUP);
@@ -765,18 +711,16 @@ void setup() {
   digitalWrite(PIN_LED_ON, LOW); digitalWrite(PIN_LED_OFF, HIGH);
 
   EEPROM.begin(EE_SIZE);
-  // eeLoad() called later after comms init so auto-restart can send packets
 
-  // ── Wi-Fi AP+STA — AP always up for ESP-NOW; STA for home network ───────
+  // ── Wi-Fi AP+STA ──────────────────────────────────────────────────────
   WiFi.persistent(false);
-  WiFi.mode(WIFI_AP_STA);              // AP = ESP-NOW channel; STA = home net
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PASS, WIFI_CH);
-  WiFi.setOutputPower(20.5f);
-  wifi_set_phy_mode(PHY_MODE_11B);
+  WiFi.setOutputPower(20.5f);       // max power: 20.5 dBm
+  wifi_set_phy_mode(PHY_MODE_11B);  // 802.11b for best range
   logFmt("[SEND] AP  IP=%s  SSID=%s", WiFi.softAPIP().toString().c_str(), AP_SSID);
 
-  // ── Try STA — attempt home WiFi connect (8 s timeout) ────────────────
-  eeLoadStaCreds();                    // reads EEPROM creds into g_staSSID/g_staPass
+  eeLoadStaCreds();
   if (g_staSSID[0] != '\0') {
     logFmt("[WIFI] STA connecting to '%s'…", g_staSSID);
     WiFi.begin(g_staSSID, g_staPass);
@@ -784,30 +728,11 @@ void setup() {
     while (WiFi.status() != WL_CONNECTED && (millis() - t0) < 8000UL) delay(200);
     if (WiFi.status() == WL_CONNECTED) {
       g_staConnected = true;
-      logFmt("[WIFI] STA connected  IP=%s  (app can use this IP)", WiFi.localIP().toString().c_str());
+      logFmt("[WIFI] STA connected  IP=%s", WiFi.localIP().toString().c_str());
     } else {
       logFmt("[WIFI] STA '%s' not reachable — AP-only (192.168.4.1)", g_staSSID);
     }
   }
-
-  // ── LoRa init ──────────────────────────────────────────────────────────
-  // SPI.begin() is called internally by LoRa.begin(); uses D5/D6/D7 by default
-  LoRa.setPins(LORA_NSS, LORA_RST, LORA_DIO0);  // DIO0 stored but never used as IRQ
-  if (!LoRa.begin(433E6)) {
-    logAdd("[LORA] init FAILED — no hardware? using ESP-NOW only");
-    g_loraOk = false;
-    g_txMode = MODE_ESPNOW;
-  } else {
-    LoRa.setTxPower(17);            // 17 dBm default; raise to 20 for longer range
-    LoRa.setSpreadingFactor(7);     // SF7 = fast (~20 ms/pkt); SF9-10 = longer range
-    LoRa.setSignalBandwidth(125E3); // 125 kHz
-    LoRa.setCodingRate4(5);         // 4/5
-    LoRa.setSyncWord(0xAB);         // private network byte (must match receiver)
-    LoRa.receive();                 // enter RX_CONTINUOUS; parsePacket() polls it
-    g_loraOk = true;
-    logAdd("[LORA] init OK  433 MHz  SF7  BW125  sync=0xAB");
-  }
-  g_lastRxMs = millis();  // start 10 s watchdog window from now
 
   // ── ESP-NOW init (3 retries) ─────────────────────────────────────────
   int tries = 3;
@@ -816,23 +741,26 @@ void setup() {
   esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
   esp_now_register_send_cb(espnowOnSend);
   esp_now_register_recv_cb(espnowOnRecv);
+  // Enable promiscuous sniffer to capture RSSI of ESP-NOW frames from receiver
+  wifi_set_promiscuous_rx_cb(rssiSnifferCb);
+  wifi_promiscuous_enable(1);
   esp_now_add_peer(BCAST_MAC, ESP_NOW_ROLE_COMBO, WIFI_CH, nullptr, 0);
-  logAdd("[SEND] ESP-NOW ready");
+  logAdd("[SEND] ESP-NOW ready  power=20.5dBm  ch=1");
 
-  eeLoad();  // now safe — comms ready
+  eeLoad();
 
-  // HTTP routes (all unchanged from v2)
-  server.on("/api/status",         HTTP_GET,  handleStatus);
-  server.on("/api/motor/on",       HTTP_POST, handleMotorOn);
-  server.on("/api/motor/off",      HTTP_POST, handleMotorOff);
-  server.on("/api/logs",           HTTP_GET,  handleLogs);
-  server.on("/api/alerts",         HTTP_GET,  handleAlerts);
-  server.on("/api/alerts/clear",   HTTP_POST, handleAlertsClear);
-  server.on("/api/timer/set",      HTTP_POST, handleTimerSet);
-  server.on("/api/timer/cancel",   HTTP_POST, handleTimerCancel);
-  server.on("/api/timer/status",   HTTP_GET,  handleTimerStatus);
-  server.on("/api/schedule/push",  HTTP_POST, handleSchedPush);
-  server.on("/api/schedule/clear", HTTP_POST, handleSchedClear);
+  // HTTP routes
+  server.on("/api/status",            HTTP_GET,  handleStatus);
+  server.on("/api/motor/on",          HTTP_POST, handleMotorOn);
+  server.on("/api/motor/off",         HTTP_POST, handleMotorOff);
+  server.on("/api/logs",              HTTP_GET,  handleLogs);
+  server.on("/api/alerts",            HTTP_GET,  handleAlerts);
+  server.on("/api/alerts/clear",      HTTP_POST, handleAlertsClear);
+  server.on("/api/timer/set",         HTTP_POST, handleTimerSet);
+  server.on("/api/timer/cancel",      HTTP_POST, handleTimerCancel);
+  server.on("/api/timer/status",      HTTP_GET,  handleTimerStatus);
+  server.on("/api/schedule/push",     HTTP_POST, handleSchedPush);
+  server.on("/api/schedule/clear",    HTTP_POST, handleSchedClear);
   server.on("/api/time/sync",         HTTP_POST, handleTimeSync);
   server.on("/api/config/drytimeout", HTTP_POST, handleDryTimeout);
   server.on("/api/wifi/config",       HTTP_POST, handleWifiConfig);
@@ -841,12 +769,12 @@ void setup() {
                    server.sendHeader("Access-Control-Allow-Methods","GET,POST,OPTIONS");
                    server.sendHeader("Access-Control-Allow-Headers","Content-Type");
                    server.send(204); };
-  server.on("/api/motor/on",       HTTP_OPTIONS, opt);
-  server.on("/api/motor/off",      HTTP_OPTIONS, opt);
-  server.on("/api/timer/set",      HTTP_OPTIONS, opt);
-  server.on("/api/timer/cancel",   HTTP_OPTIONS, opt);
-  server.on("/api/schedule/push",  HTTP_OPTIONS, opt);
-  server.on("/api/schedule/clear", HTTP_OPTIONS, opt);
+  server.on("/api/motor/on",          HTTP_OPTIONS, opt);
+  server.on("/api/motor/off",         HTTP_OPTIONS, opt);
+  server.on("/api/timer/set",         HTTP_OPTIONS, opt);
+  server.on("/api/timer/cancel",      HTTP_OPTIONS, opt);
+  server.on("/api/schedule/push",     HTTP_OPTIONS, opt);
+  server.on("/api/schedule/clear",    HTTP_OPTIONS, opt);
   server.on("/api/time/sync",         HTTP_OPTIONS, opt);
   server.on("/api/config/drytimeout", HTTP_OPTIONS, opt);
   server.on("/api/wifi/config",       HTTP_OPTIONS, opt);
@@ -861,7 +789,7 @@ void setup() {
   delay(300);
 
   updateLEDs();
-  logFmt("[SEND] ready — primary=%s", modeStr(g_txMode));
+  logAdd("[SEND] ready — ESP-NOW only");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -871,20 +799,12 @@ void setup() {
 void loop() {
   server.handleClient();
   unsigned long now = millis();
-  g_staConnected = (WiFi.status() == WL_CONNECTED);  // track STA state each loop
+  g_staConnected = (WiFi.status() == WL_CONNECTED);
 
-  // ── LoRa poll: check for packets from receiver ────────────────────────
-  loraPoll();
-
-  // ── Comms watchdog: switch mode if no RX for 10 s ────────────────────
-  if (now - g_lastRxMs >= COMMS_TIMEOUT_MS) {
-    switchCommsMode();
-  }
-
-  // ── Link-lost flag for app's linkOk field ────────────────────────────
+  // ── Link-lost flag ────────────────────────────────────────────────────
   if (g_lastRxMs > 0 && (now - g_lastRxMs) > 10000UL && !g_linkLost) {
     g_linkLost = true;
-    logFmt("[SEND] ⚠ link lost (no RX on %s)", modeStr(g_txMode));
+    logAdd("[SEND] ⚠ link lost (no RX from receiver)");
   }
 
   // ── Button ON ─────────────────────────────────────────────────────────

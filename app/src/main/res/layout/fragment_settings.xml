@@ -89,61 +89,6 @@
                         android:orientation="vertical"
                         android:padding="4dp">
 
-                        <!-- ── RTC row ──────────────────────────────────── -->
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="vertical"
-                            android:padding="12dp">
-
-                            <LinearLayout
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:orientation="horizontal"
-                                android:gravity="center_vertical">
-
-                                <LinearLayout
-                                    android:layout_width="0dp"
-                                    android:layout_height="wrap_content"
-                                    android:layout_weight="1"
-                                    android:orientation="vertical">
-
-                                    <TextView
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:text="Use hardware RTC (DS3231)"
-                                        android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-                                    <TextView
-                                        android:id="@+id/tvRtcHint"
-                                        android:layout_width="wrap_content"
-                                        android:layout_height="wrap_content"
-                                        android:text="No RTC — app syncs phone time to ESP every 30 s"
-                                        android:textAppearance="?attr/textAppearanceBodySmall"
-                                        android:textColor="?attr/colorOnSurfaceVariant" />
-                                </LinearLayout>
-
-                                <com.google.android.material.materialswitch.MaterialSwitch
-                                    android:id="@+id/switchRtcEnabled"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content" />
-                            </LinearLayout>
-
-                            <TextView
-                                android:id="@+id/tvPhoneTime"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:text="Phone time: —"
-                                android:textAppearance="?attr/textAppearanceLabelSmall"
-                                android:textColor="?attr/colorOutline"
-                                android:layout_marginTop="4dp" />
-                        </LinearLayout>
-
-                        <com.google.android.material.divider.MaterialDivider
-                            android:layout_width="match_parent"
-                            android:layout_height="1dp"
-                            android:layout_marginHorizontal="12dp" />
-
                         <!-- ── Dry-run timeout ───────────────────────────── -->
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -348,6 +293,47 @@
 
                             <com.google.android.material.materialswitch.MaterialSwitch
                                 android:id="@+id/switchShowWater"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true" />
+                        <com.google.android.material.divider.MaterialDivider
+                            android:id="@+id/dividerWaterRssi"
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginHorizontal="12dp" />
+
+                        <!-- MODULE E - ESP-NOW RSSI -->
+                        <LinearLayout
+                            android:id="@+id/sensorRssiRow"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingHorizontal="12dp"
+                            android:paddingVertical="10dp">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="ESP-NOW Signal Strength"
+                                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Show RSSI (dBm) of receiver link on dashboard"
+                                    android:textAppearance="?attr/textAppearanceBodySmall"
+                                    android:textColor="?attr/colorOnSurfaceVariant" />
+                            </LinearLayout>
+
+                            <com.google.android.material.materialswitch.MaterialSwitch
+                                android:id="@+id/switchShowRssi"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:checked="true" />

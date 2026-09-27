@@ -29,7 +29,8 @@ import java.util.Locale
 data class SensorVisibility(
     val showVoltage: Boolean = true,
     val showCurrent: Boolean = true,
-    val showWater:   Boolean = true
+    val showWater:   Boolean = true,
+    val showRssi:    Boolean = true
 )
 
 data class NotificationSettings(
@@ -72,13 +73,6 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     private val _schedules   = MutableStateFlow(loadSchedulesLocal())
     val schedules: StateFlow<List<ScheduleEntry>> = _schedules.asStateFlow()
 
-    // ── RTC ───────────────────────────────────────────────────────────────
-    private val _rtcEnabled     = MutableStateFlow(prefs.getBoolean(K_RTC, false))
-    val rtcEnabled: StateFlow<Boolean> = _rtcEnabled.asStateFlow()
-
-    private val _phoneTimeLabel = MutableStateFlow("")
-    val phoneTimeLabel: StateFlow<String> = _phoneTimeLabel.asStateFlow()
-
     // ── Dry-run timeout ───────────────────────────────────────────────────
     private val _dryRunSeconds = MutableStateFlow(prefs.getInt(K_DRY_RUN, 10))
     val dryRunSeconds: StateFlow<Int> = _dryRunSeconds.asStateFlow()
@@ -100,7 +94,6 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Dedicated notification poll — runs every 2 s independently of the main
      * poll to keep the persistent shade notification accurate.
-     * Does NOT update _motorState (avoids race with the main poll).
      */
     private var notifPollJob: Job? = null
 
@@ -124,11 +117,6 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopPolling() { pollJob?.cancel() }
 
-    /**
-     * Polls the ESP every 2 seconds purely to keep the persistent notification
-     * in sync with reality. Separate from the main poll so it doesn't depend on
-     * the user's configured poll interval and never fires optimistically on tap.
-     */
     private fun startNotifPolling() {
         notifPollJob?.cancel()
         notifPollJob = viewModelScope.launch {
@@ -179,7 +167,6 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     AppLogger.log("STALL",   "Cleared")
                 if (prev.linkOk != new.linkOk)
                     AppLogger.log("ESP-NOW", "RF link ${if (new.linkOk) "UP ✓" else "DOWN ✗"}")
-                // Water sensor state transitions
                 if (prev.waterOk != new.waterOk && new.waterOk != null) {
                     AppLogger.log("WATER", when {
                         new.waterOk == true -> "✔ Sensor OK"
@@ -187,9 +174,11 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                         else                -> "No water (motor off — no guard)"
                     })
                 }
-                // Current reading logged on motor-on transitions
                 if (!prev.motorOn && new.motorOn && new.current != null)
                     AppLogger.log("MOTOR", "Running  I=%.2fA".format(new.current))
+                // Log RSSI changes (only when link is up and value differs significantly)
+                if (new.linkOk && new.rssi != null && prev.rssi != new.rssi)
+                    AppLogger.log("ESP-NOW", "RSSI ${new.rssi} dBm")
 
                 _motorState.value = new
             }
@@ -219,13 +208,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         _isLoading.value = true
         AppLogger.log("MOTOR", "Sending: ${if (on) "ON" else "OFF"} [$trigger]")
 
-        // Mark expected change so poll() credits it correctly
         expectedMotorOn = on
         expectedTrigger = trigger
 
-        // ⚠ Do NOT call notifMgr.updatePersistent(on, …) here.
-        //   The notification is updated only after the ESP confirms the state
-        //   via the 2-second notifPollJob or the poll() call below.
         val result = if (on) repo().motorOn() else repo().motorOff()
         if (result.isSuccess) { delay(400); poll() }
         else {
@@ -293,23 +278,16 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  RTC / Time sync
+    //  Time sync (always phone time; no RTC toggle)
     // ═════════════════════════════════════════════════════════════════════
-
-    fun setRtcEnabled(enabled: Boolean) {
-        _rtcEnabled.value = enabled
-        prefs.edit().putBoolean(K_RTC, enabled).apply()
-        viewModelScope.launch { repo().syncTime(System.currentTimeMillis() / 1000L, enabled) }
-    }
 
     private fun startTimeSync() {
         timeSyncJob?.cancel()
         timeSyncJob = viewModelScope.launch {
-            val fmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
             while (isActive) {
                 val epoch = System.currentTimeMillis() / 1000L
-                _phoneTimeLabel.value = "Phone time: ${fmt.format(Date(epoch * 1000L))}"
-                repo().syncTime(epoch, _rtcEnabled.value)
+                // rtcEnabled=false — phone time is always the source
+                repo().syncTime(epoch, false)
                 delay(30_000L)
             }
         }
@@ -417,12 +395,15 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadSensorVisibility() = SensorVisibility(
         showVoltage = prefs.getBoolean(K_SHOW_VOLTAGE, true),
         showCurrent = prefs.getBoolean(K_SHOW_CURRENT, true),
-        showWater   = prefs.getBoolean(K_SHOW_WATER,   true)
+        showWater   = prefs.getBoolean(K_SHOW_WATER,   true),
+        showRssi    = prefs.getBoolean(K_SHOW_RSSI,    true)
     )
     private fun saveSensorVisibility(v: SensorVisibility) = prefs.edit()
         .putBoolean(K_SHOW_VOLTAGE, v.showVoltage)
         .putBoolean(K_SHOW_CURRENT, v.showCurrent)
-        .putBoolean(K_SHOW_WATER,   v.showWater).apply()
+        .putBoolean(K_SHOW_WATER,   v.showWater)
+        .putBoolean(K_SHOW_RSSI,    v.showRssi)
+        .apply()
 
     private fun loadNotifSettings() = NotificationSettings(
         persistentEnabled = prefs.getBoolean(K_NOTIF_PERSISTENT, true),
@@ -485,9 +466,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         private const val K_SHOW_VOLTAGE     = "show_voltage"
         private const val K_SHOW_CURRENT     = "show_current"
         private const val K_SHOW_WATER       = "show_water"
+        private const val K_SHOW_RSSI        = "show_rssi"
         private const val K_NOTIF_PERSISTENT = "notif_persistent"
         private const val K_NOTIF_ALERT      = "notif_alert"
-        private const val K_RTC              = "rtc_enabled"
         private const val K_DRY_RUN          = "dry_run_sec"
         private const val K_SCHEDULES        = "schedules_json"
         private const val K_HISTORY          = "motor_history"

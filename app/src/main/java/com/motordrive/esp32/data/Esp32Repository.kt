@@ -184,6 +184,7 @@ class Esp32Repository(private val config: ConnectionConfig) {
             linkOk        = o.optBoolean("linkOk", false),
             commsMode     = o.optString("commsMode").takeIf { it.isNotEmpty() },
             staIp         = o.optString("staIp").takeIf { it.isNotEmpty() && it != "null" },
+            rssi          = o.intOrNull("rssi"),
             isConnected   = true,
             lastUpdatedMs = System.currentTimeMillis(),
             errorMessage  = null
@@ -198,6 +199,10 @@ class Esp32Repository(private val config: ConnectionConfig) {
         }
     }
 
+    private fun JSONObject.intOrNull(key: String): Int? {
+        if (!has(key) || isNull(key)) return null
+        val i = optInt(key, Int.MIN_VALUE); return if (i == Int.MIN_VALUE) null else i
+    }
     private fun JSONObject.floatOrNull(key: String): Float? {
         if (!has(key) || isNull(key)) return null
         val d = optDouble(key, Double.NaN); return if (d.isNaN()) null else d.toFloat()
