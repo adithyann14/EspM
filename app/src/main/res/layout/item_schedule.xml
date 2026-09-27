@@ -59,7 +59,7 @@
             android:id="@+id/switchEnabled"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp" />
+            android:layout_marginEnd="12dp" />
 
         <!-- Delete button — styled as error/destructive -->
         <com.google.android.material.button.MaterialButton

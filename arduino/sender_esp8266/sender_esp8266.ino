@@ -403,10 +403,14 @@ static void sendMotorCommandInternal(bool on) {
   pkt.type = 0x01; pkt.cmd = on ? 0x01 : 0x02; pkt.seq = ++g_cmdSeq;
   logFmt("[SEND] Motor %s  seq=%lu  via ESP-NOW",
          on ? "ON" : "OFF", (unsigned long)g_cmdSeq);
+  // Pause promiscuous sniffer: prevents the IRAM callback from firing
+  // while the flash is locked by EEPROM.commit(), and ensures reliable sends.
+  wifi_promiscuous_enable(0);
   // 3× retries for broadcast reliability
   for (uint8_t i = 0; i < 3; i++) { commsSend((uint8_t*)&pkt, sizeof(pkt)); delay(12); }
   EEPROM.write(EE_MOTOR_WAS_ON, on ? 1 : 0);
   EEPROM.commit();
+  wifi_promiscuous_enable(1);  // resume RSSI sniffer
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -416,7 +420,7 @@ static void sendMotorCommandInternal(bool on) {
 // ESP8266 rx_ctrl is 12 bytes; first byte is signed RSSI.
 struct PktRxCtrl_t { int8_t rssi; uint8_t pad[11]; };
 
-static void ICACHE_FLASH_ATTR rssiSnifferCb(uint8_t *buf, uint16_t len) {
+static void ICACHE_RAM_ATTR rssiSnifferCb(uint8_t *buf, uint16_t len) {
   // buf = [PktRxCtrl_t(12)] + [802.11 frame]
   // Management Action frames (which ESP-NOW uses):
   //   FC(2) DUR(2) DA(6) SA(6) BSSID(6) SEQ(2) ...
