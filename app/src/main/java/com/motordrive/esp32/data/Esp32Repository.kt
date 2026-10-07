@@ -33,7 +33,12 @@ class Esp32Repository(private val config: ConnectionConfig) {
             (0 until arr.length())
                 .map { arr.optString(it, "").trim() }
                 .filter { it.isNotBlank() }
-        } catch (_: IOException) { emptyList() }
+        } catch (e: IOException) {
+            // Old firmware without /api/logs → empty list.  Anything else
+            // (can't connect, timeout…) must surface so the monitor can say so
+            // instead of silently showing "0 lines".
+            if (e.message?.startsWith("HTTP 404") == true) emptyList() else throw e
+        }
     }
 
     // ── Timer ─────────────────────────────────────────────────────────────
@@ -114,7 +119,7 @@ class Esp32Repository(private val config: ConnectionConfig) {
 
     // ── OTA ───────────────────────────────────────────────────────────────
     /**
-     * Asks the Sender to send an ESP-NOW OTA-enable packet to the Receiver.
+     * Asks the Sender to send a Wi-Fi (UDP) OTA-enable packet to the Receiver.
      * The Receiver switches to AP mode "MCReceiver-OTA" and starts a
      * password-protected HTTP update server for 5 minutes.
      */

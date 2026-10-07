@@ -26,9 +26,10 @@ package com.motordrive.esp32
  *    Use when phone accesses ESP via LAN IP or port-forwarding.
  *    (ESP does not make outbound calls — it is always the HTTP server.)
  *
- *  MODULE E  ·  ENABLE_ESPNOW_RSSI
- *    Shows ESP-NOW link signal strength (dBm) on the dashboard.
- *    Firmware reads RSSI via promiscuous sniffer on the sender.
+ *  MODULE E  ·  ENABLE_WIFI_RSSI
+ *    Shows the motor-side ESP's Wi-Fi signal strength (dBm) on the dashboard.
+ *    The receiver reads WiFi.RSSI() of its link to the sender's AP and
+ *    reports it in every status packet.
  *    Set FALSE only if not needed.
  * ════════════════════════════════════════════════════════════════
  */
@@ -37,5 +38,5 @@ object FeatureConfig {
     const val ENABLE_CURRENT_SENSOR  = true    // MODULE B — ACS712 on A0, works
     const val ENABLE_WATER_FLOW      = true    // MODULE C — active-LOW sensor
     const val ENABLE_SERVER_MODE     = true    // MODULE D — custom base URL
-    const val ENABLE_ESPNOW_RSSI     = true    // MODULE E — ESP-NOW link quality (dBm)
+    const val ENABLE_WIFI_RSSI     = true    // MODULE E — Wi-Fi signal strength (dBm)
 }

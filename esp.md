@@ -9,10 +9,10 @@
 ┌─────────────────────────────┐          ┌──────────────────────────────────────┐
 │   TRANSMITTER  (ESP32 #1)   │          │    RECEIVER  (ESP32 #2)              │
 │                             │          │                                      │
-│  ┌──────────┐  ┌─────────┐  │  LoRa /  │  ┌─────────┐  ┌──────────────────┐  │
-│  │ LCD 16x2 │  │ Buttons │  │◄────────►│  │LoRa/WiFi│  │ DOL Starter      │  │
-│  └──────────┘  └─────────┘  │  WiFi /  │  └─────────┘  │ START solenoid   │  │
-│                             │  ESP-NOW  │               │ STOP  solenoid   │  │
+│  ┌──────────┐  ┌─────────┐  │          │  ┌─────────┐  ┌──────────────────┐  │
+│  │ LCD 16x2 │  │ Buttons │  │◄────────►│  │  WiFi   │  │ DOL Starter      │  │
+│  └──────────┘  └─────────┘  │  WiFi    │  └─────────┘  │ START solenoid   │  │
+│                             │  (UDP)   │               │ STOP  solenoid   │  │
 │  Acts as HTTP client:       │          │               └──────────────────┘  │
 │  Sends ON/OFF commands ──────────────────────────────► Receives commands      │
 │                             │          │                                      │
@@ -28,30 +28,16 @@
 
 ---
 
-## Inter-ESP32 Communication Options
+## Inter-ESP Communication — Wi-Fi only
 
-Three methods are supported — choose based on distance and infrastructure:
+LoRa and ESP-NOW have been removed. The two boards talk over ordinary Wi-Fi:
 
-### Option 1 — LoRa (Recommended for rural / long range)
-- **Modules**: SX1278 / Ra-02 on 433 MHz
-- **Range**: 1–5 km line-of-sight
-- **No infrastructure needed** — works without WiFi or mobile network
-- **Library**: `LoRa` by Sandeep Mistry
-- ESP32 #1 sends command packets; ESP32 #2 replies with sensor JSON
+- The **sender** runs the access point `MotorControl` / `motor1234` (AP-only unless home-router credentials are set).
+- The **receiver** joins that AP as a station and exchanges **UDP datagrams on port 4210** with the sender.
+- The phone app also joins the AP and uses the sender's HTTP API at `192.168.4.1`.
+- The receiver measures `WiFi.RSSI()` to the sender's AP and reports it in every status packet; the app shows it as the Wi-Fi signal strength.
 
-### Option 2 — ESP-NOW (Short range, ultra-low latency)
-- **Built into ESP32** — no extra hardware
-- **Range**: ~200 m (clear line of sight), ~50 m through walls
-- **Library**: `esp_now.h` (built into Arduino ESP32 core)
-- Peer-to-peer, encrypted, ~1 ms latency
-
-### Option 3 — WiFi (Station mode, via router)
-- Both ESP32s connect to the same WiFi network
-- ESP32 #2 (receiver) runs the HTTP server
-- ESP32 #1 (transmitter / app) connects as a client
-- Range limited by router coverage; works anywhere on the LAN
-
-> **Note**: For global internet access (server mode in the app), ESP32 #2 connects to home WiFi and posts sensor data to your server. The Android app then reads from that server regardless of its location.
+> **Note**: For global internet access (server mode in the app), the sender can additionally join your home router (`POST /api/wifi/config`).
 
 ---
 
@@ -279,7 +265,6 @@ void motorOff() {
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
-// Add: #include <LoRa.h>   if using LoRa instead of WiFi
 
 WebServer server(80);
 

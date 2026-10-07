@@ -164,7 +164,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="12dp" />
 
-            <!-- MODULE E — ESP-NOW RSSI container -->
+            <!-- MODULE E — Wi-Fi RSSI container -->
             <FrameLayout
                 android:id="@+id/moduleRssiContainer"
                 android:layout_width="match_parent"

@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.motordrive.esp32.AppLogger
+import com.motordrive.esp32.NetworkBinder
 import com.motordrive.esp32.MotorNotificationManager
 import com.motordrive.esp32.data.ConnectionConfig
 import com.motordrive.esp32.data.Esp32Repository
@@ -99,6 +100,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         AppLogger.log("VM", "ViewModel started")
+        NetworkBinder.setTarget(_config.value.baseUrl)
         startPolling()
         startTimeSync()
         startNotifPolling()
@@ -166,7 +168,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                 if (prev.stall && !new.stall)
                     AppLogger.log("STALL",   "Cleared")
                 if (prev.linkOk != new.linkOk)
-                    AppLogger.log("ESP-NOW", "RF link ${if (new.linkOk) "UP ✓" else "DOWN ✗"}")
+                    AppLogger.log("WIFI", "ESP link ${if (new.linkOk) "UP ✓" else "DOWN ✗"}")
                 if (prev.waterOk != new.waterOk && new.waterOk != null) {
                     AppLogger.log("WATER", when {
                         new.waterOk == true -> "✔ Sensor OK"
@@ -178,7 +180,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     AppLogger.log("MOTOR", "Running  I=%.2fA".format(new.current))
                 // Log RSSI changes (only when link is up and value differs significantly)
                 if (new.linkOk && new.rssi != null && prev.rssi != new.rssi)
-                    AppLogger.log("ESP-NOW", "RSSI ${new.rssi} dBm")
+                    AppLogger.log("WIFI", "RSSI ${new.rssi} dBm")
 
                 _motorState.value = new
             }
@@ -362,7 +364,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     // ═════════════════════════════════════════════════════════════════════
 
     fun updateConfig(cfg: ConnectionConfig) {
-        _config.value = cfg; saveConfig(cfg); startPolling()
+        _config.value = cfg; saveConfig(cfg)
+        NetworkBinder.setTarget(cfg.baseUrl)
+        startPolling()
         AppLogger.log("CONN", "Config → ${cfg.baseUrl}")
     }
 

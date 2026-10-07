@@ -10,8 +10,8 @@
 Android App
     │  HTTP/JSON over Wi-Fi (AP: MotorControl)
     ▼
-Sender ESP8266          ─── ESP-NOW broadcast ───►  Receiver ESP8266
-  • Wi-Fi AP                                           • Relay (motor)
+Sender ESP8266          ─── Wi-Fi (UDP :4210) ───►  Receiver ESP8266
+  • Wi-Fi AP (receiver joins it)                       • Relay (motor)
   • REST API server                                    • Servo (physical button)
   • EEPROM (512 B)                                     • ACS712 current (EMA)
   • Timer / Scheduler                                  • Water sensor
@@ -40,11 +40,12 @@ Settings (connection IP, poll interval, sensor toggles, notifications, serial mo
 
 - **Motor ON / OFF** buttons with visual banner and progress indicator.
 - **Stall warning** — banner turns orange when motor is ON but current < 0.1 A for 5 s.
-- **Connection chip** — green = connected; shows `(RF down)` if ESP-NOW link to receiver is lost.
+- **Connection chip** — green = connected; shows `(ESP link down)` if the Wi-Fi link to the receiver is lost.
 - **Sensor modules** (each toggleable in Settings):
   - Module A — Three-phase voltage (R/Y/B)
   - Module B — ACS712 current reading (A)
   - Module C — Pipe-end water sensor (WATER / DRY / Checking…)
+  - Module E — Wi-Fi signal strength of the motor-side ESP (dBm)
 - **Notifications** (toggleable in Settings):
   - Persistent shade notification — ongoing motor state, no sound.
   - Alert on state change — sound + vibration when motor turns ON or OFF.
@@ -70,7 +71,7 @@ Set a countdown after which the motor is automatically switched **OFF**.
 - Both ESPs store the timer in **EEPROM** (`EE_TIMER_*` addresses) on every `set` / `cancel` call.
 - The remaining time is checkpointed to EEPROM **every 10 seconds** while running.
 - When the countdown reaches zero → `Motor OFF` is issued and EEPROM is updated.
-- The Sender forwards the timer config to the Receiver via **ESP-NOW packet type `0x04`** (`TimerPacket`). The Receiver runs its own parallel countdown so that if the Sender reboots, the Receiver still cuts the motor on time.
+- The Sender forwards the timer config to the Receiver via **Wi-Fi (UDP) packet type `0x04`** (`TimerPacket`). The Receiver runs its own parallel countdown so that if the Sender reboots, the Receiver still cuts the motor on time.
 
 ### Auto-restart after power cut
 
@@ -157,18 +158,19 @@ All endpoints are served by the **Sender ESP8266** at `http://192.168.4.1:80` (d
 | `motorOn` | bool | Relay state (commanded by sender or receiver countdown) |
 | `current` | float | ACS712 EMA reading in Amps |
 | `isRunning` | bool | `motorOn` mirrored (same value) |
-| `waterOk` | bool | `true` = water confirmed at pipe end, OR motor is off (no active check). `false` = motor ON but waiting for flow (30 s auto cut-off in progress) |
+| `waterOk` | bool | Real, debounced sensor state: `true` = water at the sensor (pin LOW). While the motor is ON, `false` starts the dry-run timer (default 10 s, 5–60 s in Settings); the receiver drops the relay when it expires |
 | `stall` | bool | `true` = relay is ON but current < 0.1 A for 5 s (pump stalled or dry-running) |
 | `linkOk` | bool | `true` = a status packet from the Receiver was received within the last 10 s |
+| `rssi` | int/null | Wi-Fi RSSI (dBm) of the receiver ↔ sender AP link, reported by the receiver |
 
 ---
 
-## ESP-NOW packet types (Sender ↔ Receiver)
+## UDP packet types (Sender ↔ Receiver, port 4210)
 
 | Type | Direction | Struct | Purpose |
 |------|-----------|--------|---------| 
 | `0x01` | Sender → Receiver | `CmdPacket` | Motor ON/OFF command |
-| `0x02` | Receiver → Sender | `StatusPacket` | current, motorOn, waterOk, stall |
+| `0x02` | Receiver → Sender | `StatusPacket` | current, motorOn, waterOk, stall, rssi (Wi-Fi dBm) |
 | `0x03` | Receiver → Sender | `LogPacket` | Forwarded serial log line |
 | `0x04` | Sender → Receiver | `TimerPacket` | Timer config (seconds, remaining, autoRestart, active) |
 | `0x05` | Sender → Receiver | `SchedPacket` | Full schedule sync (count + 8 entries) |
@@ -195,7 +197,8 @@ When uncommented: Wire.h is included, DS3231 is read for time, and phone-synced 
 | D1 | GPIO5 | Button ON (INPUT_PULLUP) / **I²C SCL if RTC wired** |
 | D2 | GPIO4 | Button OFF (INPUT_PULLUP) / **I²C SDA if RTC wired** |
 | D3 | GPIO0 | Green LED (motor ON) |
-| RX/GPIO3 | 3 | Red LED (motor OFF) — TX-only serial |
+| D7 | GPIO13 | Red LED (motor OFF) |
+| D4 | GPIO2 | On-board LED: solid = receiver joined AP, blink = command |
 
 ### Receiver NodeMCU
 
@@ -205,6 +208,6 @@ When uncommented: Wire.h is included, DS3231 is read for time, and phone-synced 
 | D2 | GPIO4 | Water sensor (INPUT_PULLUP, LOW=water) |
 | D3 | GPIO0 | Servo signal |
 | D4 | GPIO2 | Built-in LED blink (active-LOW) |
-| D5 | GPIO14 | **I²C SCL if RTC wired** (else LoRa dead code) |
-| D6 | GPIO12 | **I²C SDA if RTC wired** (else LoRa dead code) |
+| D5 | GPIO14 | **I²C SCL if RTC wired** |
+| D6 | GPIO12 | **I²C SDA if RTC wired** |
 | A0 | ADC | ACS712 current sensor |

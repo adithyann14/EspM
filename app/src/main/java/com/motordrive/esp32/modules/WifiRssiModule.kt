@@ -6,10 +6,11 @@ import com.motordrive.esp32.R
 import com.motordrive.esp32.data.MotorState
 
 /**
- * MODULE E — ESP-NOW Link Signal Strength
+ * MODULE E — Wi-Fi Signal Strength
  *
- * Displays the RSSI (Received Signal Strength Indicator) of the ESP-NOW
- * radio link between the sender and receiver, expressed in dBm.
+ * Displays the Wi-Fi RSSI (Received Signal Strength Indicator) seen by the
+ * motor-side ESP (receiver) when talking to the sender's Wi-Fi access point,
+ * expressed in dBm.
  *
  * RSSI interpretation:
  *   ≥ -50 dBm  → Excellent  (very close range)
@@ -18,7 +19,7 @@ import com.motordrive.esp32.data.MotorState
  *   -75..-85   → Weak       (reliability may drop)
  *   < -85 dBm  → Very Weak  (high packet-loss risk)
  */
-class EspNowRssiModule(root: View) {
+class WifiRssiModule(root: View) {
 
     private val tvRssiValue:   TextView = root.findViewById(R.id.tvRssiValue)
     private val tvRssiQuality: TextView = root.findViewById(R.id.tvRssiQuality)
@@ -38,7 +39,7 @@ class EspNowRssiModule(root: View) {
             tvRssiValue.text   = "—"
             tvRssiQuality.text = "Link Down"
             tvRssiBars.text    = "○○○○○"
-            tvLinkStatus.text  = "ESP-NOW link is down"
+            tvLinkStatus.text  = "Wi-Fi link is down"
             return
         }
 
@@ -47,12 +48,12 @@ class EspNowRssiModule(root: View) {
             tvRssiValue.text   = "—"
             tvRssiQuality.text = "Measuring…"
             tvRssiBars.text    = "○○○○○"
-            tvLinkStatus.text  = "Waiting for first packet"
+            tvLinkStatus.text  = "Waiting for first reading"
             return
         }
 
         tvRssiValue.text = "${rssi} dBm"
-        tvLinkStatus.text = "ESP-NOW link active"
+        tvLinkStatus.text = "Wi-Fi connected"
 
         when {
             rssi >= -50 -> {

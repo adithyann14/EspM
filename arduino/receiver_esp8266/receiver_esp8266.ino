@@ -1,31 +1,40 @@
 /**
  * ════════════════════════════════════════════════════════════════════════
- *  RECEIVER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v4
+ *  RECEIVER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v5
  *
- *  Comms: ESP-NOW only.  Max TX power: 20.5 dBm, PHY 802.11b.
- *  Listens on ESP-NOW; replies (status packets) via ESP-NOW broadcast.
+ *  Comms: plain Wi-Fi only (no ESP-NOW, no LoRa).  The receiver joins the
+ *  sender's access point "MotorControl" as a station and exchanges UDP
+ *  datagrams with it on port 4210.  Max TX power 20.5 dBm, PHY 802.11b,
+ *  modem sleep OFF (sleeping radios drop UDP).
  *
  *  ── Pins ──────────────────────────────────────────────────────────────
  *  D1 (GPIO5)  → Relay IN, active HIGH
- *  D2 (GPIO4)  → Water sensor (INPUT_PULLUP): LOW=water, HIGH=dry
- *  D3 (GPIO0)  → Servo signal
- *  D4 (GPIO2)  → Built-in LED, active LOW
+ *  D2 (GPIO4)  → Water sensor (INPUT_PULLUP), ACTIVE LOW: LOW=water, HIGH=dry
+ *  D3 (GPIO0)  → Servo signal (attached only while moving, idles HIGH)
+ *  D4 (GPIO2)  → Built-in LED, active LOW: solid = Wi-Fi up, blink = command
  *  A0          → ACS712 current sensor output
  *
- *  ── Water sensor logic ───────────────────────────────────────────────
- *  INPUT_PULLUP: disconnected/dry → HIGH (safe, no false start).
- *  Sensor grounds pin when water present → LOW (water confirmed).
- *  Pre-start guard: blocks ON if pin reads HIGH at start.
- *  10 s dry-run timeout. 2 s mid-run debounce auto cut-off.
+ *  ── Dry-run protection (what changed and why) ────────────────────────
+ *  • While the motor is ON, every continuous "no water" spell is timed.
+ *    When it reaches the dry-run timeout (default 10 s, set from the app,
+ *    stored in EEPROM) the RELAY IS DROPPED IMMEDIATELY from the main
+ *    loop.  It does not wait for, or depend on, the servo state machine,
+ *    a queued command, or an "armed" flag.  It is level-triggered: as
+ *    long as (motor ON && dry for ≥ timeout) it cuts, so it cannot miss.
+ *  • Water must be present for WATER_WET_CONFIRM_MS (1 s) before the dry
+ *    timer is reset.  Contactor/motor EMI on a long sensor wire can pull
+ *    the pin LOW for a few ms; that used to reset the timer forever.
+ *  • Status "waterOk" is the real sensor state, not "true when idle".
+ *  Set BLOCK_START_WHEN_DRY to 1 to also refuse to start when dry.
  * ════════════════════════════════════════════════════════════════════════
  */
 
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
 #include <Servo.h>
 #include <EEPROM.h>
 
 extern "C" {
-  #include <espnow.h>
   #include <user_interface.h>
 }
 
@@ -35,11 +44,21 @@ extern "C" {
 #define PIN_SERVO  D3   // GPIO0   Servo signal
 #define PIN_LED    2    // GPIO2   Built-in LED, active LOW (= D4)
 
-// ── Sender AP credentials (for ESP-NOW channel sync) ─────────────────────
+// ── Sender AP credentials (must match the sender sketch) ─────────────────
 static const char*    AP_SSID    = "MotorControl";
 static const char*    AP_PASS    = "motor1234";
-static const uint8_t  WIFI_CH    = 1;
-static const uint16_t AP_TIMEOUT = 5000;
+static const uint16_t AP_TIMEOUT = 8000;      // max wait for Wi-Fi at boot (ms)
+static const uint16_t UDP_PORT   = 4210;      // same port on sender and receiver
+#define WIFI_RETRY_MS 15000UL                 // re-issue WiFi.begin() while down
+
+// ── Water sensor behaviour ────────────────────────────────────────────────
+#define WATER_ACTIVE_LOW      1   // 1: pin LOW = water (your sensor).  0: pin HIGH = water
+#define BLOCK_START_WHEN_DRY  0   // 1: refuse to start when no water at the sensor
+                                  // 0: start, then cut off after the dry-run timeout
+                                  //    (needed when the sensor is at the pipe END and
+                                  //     water only arrives after the pump runs)
+#define WATER_DRY_DEBOUNCE_MS  300UL   // wet→dry must hold this long (fail-safe: quick)
+#define WATER_WET_CONFIRM_MS  1000UL   // dry→wet must hold this long (ignores EMI spikes)
 
 // ── EEPROM ────────────────────────────────────────────────────────────────
 #define EE_SIZE          128
@@ -53,6 +72,9 @@ static const uint16_t AP_TIMEOUT = 5000;
 #define EE_SCHED_COUNT   16
 #define EE_SCHED_BASE    17
 #define EE_MOTOR_WAS_ON  81
+#define EE_DRYRUN_MAGIC  82   // 0xD7 when EE_DRYRUN_MS holds a valid value
+#define EE_DRYRUN_MS     83   // uint32, dry-run timeout in ms
+#define EE_DRYRUN_MAGIC_VAL 0xD7
 #define EE_MAGIC_VAL     0xBE
 
 static inline void eeWriteU32(int addr, uint32_t v) {
@@ -68,8 +90,7 @@ static inline uint32_t eeReadU32(int addr) {
        | ((uint32_t)EEPROM.read(addr+3) << 24);
 }
 
-// ── ESP-NOW packets ────────────────────────────────────────────────────────
-static uint8_t BCAST_MAC[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+// ── Packets (sent as UDP datagrams) ───────────────────────────────────────
 
 typedef struct __attribute__((packed)) {
   uint8_t type; uint8_t cmd; uint32_t seq;
@@ -78,6 +99,7 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
   uint8_t type; float current; uint8_t motorOn;
   uint8_t waterOk; uint8_t stall; uint32_t seq;
+  int8_t  rssi;                                     // Wi-Fi RSSI to sender AP (dBm)
 } StatusPacket;                                     // 0x02
 
 typedef struct __attribute__((packed)) {
@@ -102,16 +124,28 @@ typedef struct __attribute__((packed)) {
   uint8_t type; uint32_t dryRunMs;
 } ConfigPacket;                                     // 0x07
 
-// ── ESP-NOW log forwarding ────────────────────────────────────────────────
-static bool g_espNowReady = false;
+// ── Wi-Fi / UDP transport ─────────────────────────────────────────────────
+static WiFiUDP       g_udp;
+static bool          g_wifiUp      = false;
+static unsigned long g_lastWifiTry = 0;
 
+static inline bool wifiIsUp() { return WiFi.status() == WL_CONNECTED; }
+
+// Send one datagram to the sender (the AP's gateway address, 192.168.4.1).
+static void commsSend(const uint8_t* data, size_t len) {
+  if (!wifiIsUp()) return;
+  g_udp.beginPacket(WiFi.gatewayIP(), UDP_PORT);
+  g_udp.write(data, len);
+  g_udp.endPacket();
+}
+
+// ── Log forwarding to the sender ──────────────────────────────────────────
 static void sendLogToSender(const char* msg) {
   Serial.println(msg);
-  if (!g_espNowReady) return;
   LogPacket pkt; pkt.type = 0x03;
   strncpy(pkt.msg, msg, sizeof(pkt.msg) - 1);
   pkt.msg[sizeof(pkt.msg) - 1] = '\0';
-  esp_now_send(BCAST_MAC, (uint8_t*)&pkt, sizeof(pkt));
+  commsSend((uint8_t*)&pkt, sizeof(pkt));
 }
 
 static void sendLogFmt(const char* fmt, ...) {
@@ -131,12 +165,11 @@ static const float CURRENT_RUN_THRESH = 0.10f;
 #define SERVO_NEUTRAL  90
 #define SERVO_START     0
 #define SERVO_STOP    180
-#define SERVO_HOLD_MS 600UL
-#define SERVO_BACK_MS 400UL
+#define SERVO_HOLD_MS 800UL   // servo travel time before the relay changes
+#define SERVO_BACK_MS 500UL   // return-to-neutral time before detaching
 
 // ── Timing constants ──────────────────────────────────────────────────────
 #define WATER_TIMEOUT_DEFAULT_MS 10000UL
-#define WATER_LOST_DEBOUNCE_MS   2000UL
 static uint32_t g_dryRunMs = WATER_TIMEOUT_DEFAULT_MS;
 #define STALL_TIMEOUT_MS         5000UL
 #define STATUS_INTERVAL_MS       1000UL
@@ -152,13 +185,6 @@ static ServoState    servoState  = ServoState::IDLE;
 static ServoIntent   servoIntent = ServoIntent::NONE;
 static unsigned long servoTimer  = 0;
 
-// ── Deferred ESP-NOW RX buffer ────────────────────────────────────────────
-// Packets are copied here inside the callback, then processed safely in loop().
-// This avoids calling EEPROM.commit() or esp_now_send() from callback context.
-static uint8_t          g_rxBuf[250];
-static volatile uint8_t g_rxLen     = 0;
-static volatile bool    g_rxPending = false;
-
 // ── Motor / command state ─────────────────────────────────────────────────
 static volatile bool     g_pendingOn  = false;
 static volatile bool     g_pendingOff = false;
@@ -167,11 +193,11 @@ static volatile bool     g_rxFlag     = false;
 static bool              g_motorOn    = false;
 static uint8_t           g_queuedCmd  = 0;  // 0=none 1=ON 2=OFF
 
-// ── Water sensor ──────────────────────────────────────────────────────────
-static bool          g_waterCheckActive = false;
-static unsigned long g_waterCheckStart  = 0;
-static bool          g_waterDetected    = false;
-static unsigned long g_waterLostMs      = 0;
+// ── Water sensor (debounced) ──────────────────────────────────────────────
+static bool          g_wet          = false;  // debounced: true = water present
+static bool          g_wetRaw       = false;  // last raw reading
+static unsigned long g_wetRawSince  = 0;      // when raw reading last changed
+static unsigned long g_dryStartMs   = 0;      // when the current dry spell began (0 = not dry)
 
 // ── ACS712 EMA ────────────────────────────────────────────────────────────
 static float         g_currentSmooth = 0.0f;
@@ -252,7 +278,12 @@ static void eeLoad() {
     g_scheds[i].days        = EEPROM.read(b+4); g_scheds[i].autoRestart = EEPROM.read(b+5);
     g_scheds[i].enabled     = EEPROM.read(b+6);
   }
+  if (EEPROM.read(EE_DRYRUN_MAGIC) == EE_DRYRUN_MAGIC_VAL) {
+    uint32_t d = eeReadU32(EE_DRYRUN_MS);
+    if (d >= 5000UL && d <= 60000UL) g_dryRunMs = d;
+  }
   bool motorWasOn = EEPROM.read(EE_MOTOR_WAS_ON) != 0;
+  Serial.printf("[RECV] dry-run timeout %lus\n", (unsigned long)(g_dryRunMs / 1000UL));
   Serial.printf("[RECV] EEPROM  timer=%lus(%s)  sched=%d  motorWasOn=%d\n",
     (unsigned long)g_timerTotal, wasActive?"active":"idle",
     (int)g_schedCount, (int)motorWasOn);
@@ -275,7 +306,7 @@ static void updateCurrentEMA(unsigned long now) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Status broadcast via ESP-NOW
+//  Status → sender (UDP)
 // ══════════════════════════════════════════════════════════════════════════
 
 static void sendStatusNow() {
@@ -283,20 +314,22 @@ static void sendStatusNow() {
   pkt.type    = 0x02;
   pkt.current = g_currentSmooth;
   pkt.motorOn = g_motorOn ? 1 : 0;
-  pkt.waterOk = (g_waterDetected || !g_waterCheckActive) ? 1 : 0;
+  pkt.waterOk = g_wet ? 1 : 0;              // real, debounced sensor state
   pkt.stall   = g_stallDetected ? 1 : 0;
   pkt.seq     = ++g_statusSeq;
-  esp_now_send(BCAST_MAC, (uint8_t*)&pkt, sizeof(pkt));
+  pkt.rssi    = wifiIsUp() ? (int8_t)constrain(WiFi.RSSI(), -127, 0) : 0;
+  commsSend((uint8_t*)&pkt, sizeof(pkt));
   g_lastStatusMs = millis();
 }
 
 static void sendStatusPeriodic(unsigned long now) {
   if (now - g_lastStatusMs < STATUS_INTERVAL_MS) return;
   sendStatusNow();
-  Serial.printf("[RECV] I=%.2fA  relay=%d  water=%s  stall=%d  timer=%lus\n",
+  Serial.printf("[RECV] I=%.2fA  relay=%d  water=%s(pin=%s)  stall=%d  timer=%lus  rssi=%ddBm\n",
     g_currentSmooth, (int)g_motorOn,
-    g_waterDetected ? "OK" : (g_waterCheckActive ? "WAIT" : "IDLE"),
-    (int)g_stallDetected, (unsigned long)g_timerRemain);
+    g_wet ? "WET" : "DRY", digitalRead(PIN_WATER) == LOW ? "LOW" : "HIGH",
+    (int)g_stallDetected, (unsigned long)g_timerRemain,
+    wifiIsUp() ? (int)WiFi.RSSI() : 0);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -305,27 +338,57 @@ static void sendStatusPeriodic(unsigned long now) {
 
 static void deactivateMotor();
 
+// Servo is attached ONLY while it moves, then released with GPIO0 idling HIGH.
+// A permanently attached servo keeps a timer ISR running that jitters the
+// Wi-Fi stack, and GPIO0 held LOW at reset would drop the ESP into flash mode.
+static void servoMove(int angle) {
+  if (!motorServo.attached()) motorServo.attach(PIN_SERVO, 500, 2400);
+  motorServo.write(angle);
+}
+static void servoRelease() {
+  motorServo.detach();
+  pinMode(PIN_SERVO, OUTPUT);
+  digitalWrite(PIN_SERVO, HIGH);
+}
+
+static void beginServoPress(ServoIntent intent) {
+  servoIntent = intent;
+  servoMove(intent == ServoIntent::STARTING ? SERVO_START : SERVO_STOP);
+  servoState = ServoState::PRESSING; servoTimer = millis();
+  Serial.println(intent == ServoIntent::STARTING ? "[RECV] servo→0° (START)"
+                                                  : "[RECV] servo→180° (STOP)");
+}
+
 static void activateMotor() {
   if (servoState != ServoState::IDLE || g_motorOn) return;
-  if (digitalRead(PIN_WATER) == HIGH) {
+#if BLOCK_START_WHEN_DRY
+  if (!g_wet) {
     sendLogToSender("[RECV] ✗ WATER GUARD — no water, start BLOCKED");
-    g_waterDetected = false;
     sendStatusNow();
     return;
   }
-  servoIntent = ServoIntent::STARTING;
-  motorServo.write(SERVO_START);
-  servoState = ServoState::PRESSING; servoTimer = millis();
-  Serial.println("[RECV] servo→0° (START)");
+#endif
+  beginServoPress(ServoIntent::STARTING);
 }
 
 static void deactivateMotor() {
   if (servoState != ServoState::IDLE || !g_motorOn) return;
-  servoIntent = ServoIntent::STOPPING;
-  motorServo.write(SERVO_STOP);
-  servoState = ServoState::PRESSING; servoTimer = millis();
-  g_waterCheckActive = false; g_waterDetected = false; g_waterLostMs = 0;
-  Serial.println("[RECV] servo→180° (STOP)");
+  beginServoPress(ServoIntent::STOPPING);
+}
+
+// SAFETY CUT: drop the relay right now, no matter what the servo is doing.
+// Used by the dry-run guard.  The servo STOP press (if free) follows as a
+// courtesy so the starter's own button state matches.
+static void cutMotorNow(const char* why) {
+  digitalWrite(PIN_RELAY, LOW);
+  g_motorOn = false;
+  g_dryStartMs = 0;
+  g_stallTimer = 0; g_stallDetected = false;
+  g_queuedCmd = 0;
+  sendLogToSender(why);
+  EEPROM.write(EE_MOTOR_WAS_ON, 0); EEPROM.commit();
+  sendStatusNow();
+  if (servoState == ServoState::IDLE) beginServoPress(ServoIntent::STOPPING);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -339,28 +402,31 @@ static void handleServo(unsigned long now) {
         if (servoIntent == ServoIntent::STARTING) {
           digitalWrite(PIN_RELAY, HIGH);
           g_motorOn = true;
-          g_waterCheckActive = true; g_waterCheckStart = now;
-          g_waterDetected = false; g_waterLostMs = 0;
+          g_dryStartMs = 0;                       // fresh dry-run window
           g_stallTimer = 0; g_stallDetected = false;
           sendLogToSender("[RECV] ✔ RELAY ON");
           EEPROM.write(EE_MOTOR_WAS_ON, 1); EEPROM.commit();
           sendStatusNow();
         } else if (servoIntent == ServoIntent::STOPPING) {
           digitalWrite(PIN_RELAY, LOW);
-          g_motorOn = false;
-          g_stallTimer = 0; g_stallDetected = false;
-          sendLogToSender("[RECV] ✔ RELAY OFF");
-          EEPROM.write(EE_MOTOR_WAS_ON, 0); EEPROM.commit();
-          sendStatusNow();
+          if (g_motorOn) {                        // (already false after a safety cut)
+            g_motorOn = false;
+            g_dryStartMs = 0;
+            g_stallTimer = 0; g_stallDetected = false;
+            sendLogToSender("[RECV] ✔ RELAY OFF");
+            EEPROM.write(EE_MOTOR_WAS_ON, 0); EEPROM.commit();
+            sendStatusNow();
+          }
         }
-        motorServo.write(SERVO_NEUTRAL);
+        servoMove(SERVO_NEUTRAL);
         servoState = ServoState::RETURNING; servoTimer = now;
       }
       break;
     case ServoState::RETURNING:
       if (now - servoTimer >= SERVO_BACK_MS) {
+        servoRelease();
         servoState = ServoState::IDLE; servoIntent = ServoIntent::NONE;
-        Serial.println("[RECV] servo→90° neutral");
+        Serial.println("[RECV] servo released (neutral)");
         if      (g_queuedCmd == 1) { g_queuedCmd = 0; activateMotor();   }
         else if (g_queuedCmd == 2) { g_queuedCmd = 0; deactivateMotor(); }
       }
@@ -370,48 +436,48 @@ static void handleServo(unsigned long now) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Water sensor — start guard + timeout + continuous dry-run detection
+//  Water sensor — debounce + dry-run cut-off
 // ══════════════════════════════════════════════════════════════════════════
 
+static inline bool waterPinWet() {
+#if WATER_ACTIVE_LOW
+  return digitalRead(PIN_WATER) == LOW;     // LOW  = water present
+#else
+  return digitalRead(PIN_WATER) == HIGH;    // HIGH = water present
+#endif
+}
+
+// Runs every loop, motor ON or OFF: keeps g_wet = stable sensor state.
+// Asymmetric debounce: going dry is accepted fast, going wet must be proven.
+static void updateWaterSensor(unsigned long now) {
+  bool raw = waterPinWet();
+  if (raw != g_wetRaw) { g_wetRaw = raw; g_wetRawSince = now; return; }
+  if (raw == g_wet) return;
+  unsigned long need = raw ? WATER_WET_CONFIRM_MS : WATER_DRY_DEBOUNCE_MS;
+  if ((now - g_wetRawSince) >= need) {
+    g_wet = raw;
+    sendLogToSender(g_wet ? "[RECV] water detected" : "[RECV] water gone");
+    sendStatusNow();
+  }
+}
+
+// Level-triggered dry-run guard (see header).  Called every loop.
 static void handleWaterSensor(unsigned long now) {
-  if (!g_motorOn) { g_waterLostMs = 0; return; }
-  bool waterPresent = (digitalRead(PIN_WATER) == LOW);  // LOW = water ✔
-  if (!g_waterDetected) {
-    if (!g_waterCheckActive) return;
-    if (waterPresent) {
-      g_waterDetected    = true;
-      g_waterCheckActive = false;
-      g_waterLostMs      = 0;
-      sendLogToSender("[RECV] ✔ water confirmed OK");
-      sendStatusNow();
-      return;
-    }
-    if (now - g_waterCheckStart >= g_dryRunMs) {
-      sendLogToSender("[RECV] ✗ WATER TIMEOUT 10s — auto cut-off");
-      g_waterCheckActive = false;
-      if (servoState == ServoState::IDLE) deactivateMotor();
-      else                                g_queuedCmd = 2;
-      sendStatusNow();
-    }
-  } else {
-    if (!waterPresent) {
-      if (g_waterLostMs == 0) {
-        g_waterLostMs = now;
-        Serial.println("[RECV] ⚠ water lost — debouncing...");
-      } else if (now - g_waterLostMs >= WATER_LOST_DEBOUNCE_MS) {
-        sendLogToSender("[RECV] ✗ WATER LOST 2s — dry-run guard — cut-off");
-        g_waterDetected = false;
-        g_waterLostMs   = 0;
-        if (servoState == ServoState::IDLE) deactivateMotor();
-        else                                g_queuedCmd = 2;
-        sendStatusNow();
-      }
-    } else {
-      if (g_waterLostMs != 0) {
-        g_waterLostMs = 0;
-        Serial.println("[RECV] water restored");
-      }
-    }
+  if (!g_motorOn) { g_dryStartMs = 0; return; }
+  if (g_wet) {
+    if (g_dryStartMs != 0) sendLogToSender("[RECV] water back — dry timer reset");
+    g_dryStartMs = 0;
+    return;
+  }
+  if (g_dryStartMs == 0) {
+    g_dryStartMs = now;
+    sendLogFmt("[RECV] ⚠ no water — cut-off in %lus", (unsigned long)(g_dryRunMs / 1000UL));
+    return;
+  }
+  if ((now - g_dryStartMs) >= g_dryRunMs) {
+    char msg[60];
+    snprintf(msg, sizeof(msg), "[RECV] ✗ NO WATER %lus — relay cut", (unsigned long)(g_dryRunMs / 1000UL));
+    cutMotorNow(msg);
   }
 }
 
@@ -489,7 +555,7 @@ static void handleScheduler(unsigned long now) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  Packet processor (ESP-NOW only)
+//  Packet processor
 // ══════════════════════════════════════════════════════════════════════════
 
 static void processPacket(uint8_t* data, uint8_t len) {
@@ -552,6 +618,9 @@ static void processPacket(uint8_t* data, uint8_t len) {
       ConfigPacket pkt; memcpy(&pkt, data, sizeof(pkt));
       if (pkt.dryRunMs >= 5000UL && pkt.dryRunMs <= 60000UL) {
         g_dryRunMs = pkt.dryRunMs;
+        EEPROM.write(EE_DRYRUN_MAGIC, EE_DRYRUN_MAGIC_VAL);
+        eeWriteU32(EE_DRYRUN_MS, g_dryRunMs);
+        EEPROM.commit();                       // survives reboot / power cut
         sendLogFmt("[RECV] dry-run timeout → %lus", (unsigned long)(g_dryRunMs / 1000UL));
       }
       break;
@@ -561,19 +630,38 @@ static void processPacket(uint8_t* data, uint8_t len) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  ESP-NOW callbacks
+//  Wi-Fi link supervision + UDP receive
 // ══════════════════════════════════════════════════════════════════════════
 
-void espnowOnSend(uint8_t*, uint8_t) { }
+static void handleWifi(unsigned long now) {
+  bool up = wifiIsUp();
+  if (up && !g_wifiUp) {
+    g_wifiUp = true;
+    g_udp.stop(); g_udp.begin(UDP_PORT);  // fresh socket after every (re)connect
+    Serial.printf("[RECV] Wi-Fi up  ch=%d  rssi=%ddBm  ip=%s\n", (int)WiFi.channel(),
+                  (int)WiFi.RSSI(), WiFi.localIP().toString().c_str());
+    sendStatusNow();                      // tell the sender straight away
+  } else if (!up && g_wifiUp) {
+    g_wifiUp = false;
+    Serial.println("[RECV] Wi-Fi LOST — retrying");
+  }
+  if (!up && (now - g_lastWifiTry) >= WIFI_RETRY_MS) {
+    g_lastWifiTry = now;
+    WiFi.begin(AP_SSID, AP_PASS);         // re-scan; follows the sender's channel
+  }
+}
 
-// SAFE: only copies raw bytes; no EEPROM, no Serial, no esp_now_send here.
-// processPacket() runs in loop() after g_rxPending is consumed.
-void espnowOnRecv(uint8_t*, uint8_t* data, uint8_t len) {
-  if (g_rxPending) return;                             // previous not yet consumed — drop
-  uint8_t n = (len > (uint8_t)sizeof(g_rxBuf)) ? (uint8_t)sizeof(g_rxBuf) : len;
-  memcpy(g_rxBuf, data, n);
-  g_rxLen     = n;
-  g_rxPending = true;                                  // signal loop()
+// Drain pending datagrams. Only the sender (the AP gateway) is trusted.
+static void pollUdp() {
+  for (uint8_t n = 0; n < 4; n++) {
+    int len = g_udp.parsePacket();
+    if (len <= 0) return;
+    uint8_t buf[250];
+    int got = g_udp.read(buf, sizeof(buf));
+    if (got <= 0) continue;
+    if (g_udp.remoteIP() != WiFi.gatewayIP()) continue;
+    processPacket(buf, (uint8_t)got);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -587,17 +675,20 @@ void setup() {
 
   Serial.begin(115200);
   delay(100);
-  Serial.println("\n[RECV] boot v4  ESP-NOW only");
+  Serial.println("\n[RECV] boot v5  Wi-Fi (UDP)");
 
   pinMode(PIN_LED, OUTPUT); digitalWrite(PIN_LED, HIGH);  // off (active LOW)
 
   pinMode(PIN_WATER, INPUT_PULLUP);
-  Serial.printf("[RECV] water at boot: %s\n",
-                digitalRead(PIN_WATER) == LOW ? "WET (LOW)" : "DRY (HIGH)");
+  g_wetRaw = g_wet = waterPinWet();
+  g_wetRawSince = millis();
+  Serial.printf("[RECV] water at boot: %s  (pin=%s, %s)\n",
+                g_wet ? "WET" : "DRY",
+                digitalRead(PIN_WATER) == LOW ? "LOW" : "HIGH",
+                WATER_ACTIVE_LOW ? "active-LOW" : "active-HIGH");
 
-  motorServo.attach(PIN_SERVO, 500, 2400);
-  motorServo.write(SERVO_NEUTRAL);
-  delay(500); Serial.println("[RECV] servo @ 90°");
+  pinMode(PIN_SERVO, OUTPUT);
+  digitalWrite(PIN_SERVO, HIGH);          // GPIO0 idles HIGH; servo attaches only when moving
 
   EEPROM.begin(EE_SIZE);
   eeLoad();
@@ -607,34 +698,30 @@ void setup() {
   delay(400);
   for (int i = 0; i < 3; i++) { digitalWrite(PIN_LED,LOW);delay(300);digitalWrite(PIN_LED,HIGH);delay(300); }
 
-  // ── Wi-Fi STA — join sender AP for channel sync ───────────────────────
+  // ── Wi-Fi: join the sender's access point ─────────────────────────────
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(AP_SSID, AP_PASS);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);   // modem sleep drops incoming UDP
   WiFi.setOutputPower(20.5f);       // max power: 20.5 dBm
   wifi_set_phy_mode(PHY_MODE_11B);  // 802.11b for best range
-  Serial.print("[RECV] AP connect");
+  WiFi.begin(AP_SSID, AP_PASS);
+  g_lastWifiTry = millis();
+  Serial.print("[RECV] joining sender AP");
   unsigned long t = millis();
-  while (WiFi.status() != WL_CONNECTED && millis()-t < AP_TIMEOUT) { delay(200); Serial.print('.'); }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\n[RECV] joined  ch=%d\n", (int)WiFi.channel());
+  while (!wifiIsUp() && millis() - t < AP_TIMEOUT) { delay(200); Serial.print('.'); }
+  if (wifiIsUp()) {
+    Serial.printf("\n[RECV] joined  ch=%d  rssi=%ddBm  ip=%s\n", (int)WiFi.channel(),
+                  (int)WiFi.RSSI(), WiFi.localIP().toString().c_str());
   } else {
-    Serial.println("\n[RECV] AP not found — forcing ch=" + String(WIFI_CH));
-    WiFi.disconnect(); wifi_set_channel(WIFI_CH);
+    Serial.println("\n[RECV] sender AP not found yet — will keep retrying in loop()");
   }
 
-  // ── ESP-NOW init (3 retries) ─────────────────────────────────────────
-  int tries = 3;
-  while (esp_now_init() != 0 && tries-- > 0) { Serial.println("[RECV] ESP-NOW retry"); delay(500); }
-  if (tries < 0) { Serial.println("[RECV] ESP-NOW FAILED — reboot"); delay(1000); ESP.restart(); }
-  esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
-  esp_now_register_send_cb(espnowOnSend);
-  esp_now_register_recv_cb(espnowOnRecv);
-  esp_now_add_peer(BCAST_MAC, ESP_NOW_ROLE_COMBO, WIFI_CH, nullptr, 0);
-  g_espNowReady = true;
+  g_udp.begin(UDP_PORT);
+  g_wifiUp = wifiIsUp();
 
   for (int i=0;i<3;i++){digitalWrite(PIN_LED,LOW);delay(80);digitalWrite(PIN_LED,HIGH);delay(80);}
-  sendLogFmt("[RECV] ready  ESP-NOW only  power=20.5dBm  ch=1");
+  sendLogToSender("[RECV] ready  Wi-Fi/UDP  power=20.5dBm");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -644,19 +731,16 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // ── Deferred ESP-NOW packet processing (safe: called from loop, not callback) ──
-  if (g_rxPending) {
-    uint8_t len  = g_rxLen;
-    g_rxPending  = false;          // clear flag before processing so a new RX can queue
-    processPacket(g_rxBuf, len);
-  }
-
+  handleWifi(now);
+  pollUdp();
   updateCurrentEMA(now);
+  updateWaterSensor(now);
 
-  // ── LED blink on RX ──────────────────────────────────────────────────
-  if (g_rxFlag) { g_rxFlag = false; g_blinkUntil = now + BLINK_MS; digitalWrite(PIN_LED, LOW); }
-  // Use signed subtraction to handle millis() wrap-around correctly (~49 days)
-  if ((long)(now - g_blinkUntil) >= 0) digitalWrite(PIN_LED, HIGH);
+  // ── LED: solid = Wi-Fi up, off = down, brief OFF blink on each command ──
+  if (g_rxFlag) { g_rxFlag = false; g_blinkUntil = now + BLINK_MS; }
+  // signed subtraction handles millis() wrap-around (~49 days)
+  bool blinking = (long)(now - g_blinkUntil) < 0;
+  digitalWrite(PIN_LED, (g_wifiUp && !blinking) ? LOW : HIGH);
 
   // ── Command conflict: OFF always wins over ON ─────────────────────────
   if (g_pendingOff && g_pendingOn) g_pendingOn = false;

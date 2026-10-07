@@ -75,30 +75,40 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="end"
-                android:layout_marginBottom="2dp">
+                android:layout_marginBottom="6dp">
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnCopy"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="32dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="40dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
                     android:text="Copy"
-                    android:textSize="12sp"
+                    android:textSize="13sp"
                     android:textColor="#00C853"
                     android:layout_marginEnd="8dp"
                     app:strokeColor="#333333"
-                    app:cornerRadius="6dp"
-                    style="@style/Widget.Material3.Button.OutlinedButton" />
+                    app:cornerRadius="8dp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnClearLog"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="32dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="40dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
                     android:text="Clear"
-                    android:textSize="12sp"
+                    android:textSize="13sp"
                     android:textColor="#00C853"
                     app:strokeColor="#333333"
-                    app:cornerRadius="6dp"
-                    style="@style/Widget.Material3.Button.OutlinedButton" />
+                    app:cornerRadius="8dp" />
             </LinearLayout>
         </LinearLayout>
 

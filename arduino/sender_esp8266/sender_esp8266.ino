@@ -1,19 +1,30 @@
 /**
  * ════════════════════════════════════════════════════════════════════════
- *  SENDER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v4
+ *  SENDER  —  NodeMCU ESP8266  (board: NodeMCU 1.0 / ESP-12E)   v5
  *
- *  Comms: ESP-NOW only.  Max TX power: 20.5 dBm, PHY 802.11b.
+ *  Comms: plain Wi-Fi only (no ESP-NOW, no LoRa).
  *
- *  Wi-Fi AP "MotorControl" / "motor1234" — always up (ESP-NOW channel sync).
- *  Wi-Fi STA — joins home router so the app works on home WiFi.
- *              Set creds via STA_SSID_DEFAULT/STA_PASS_DEFAULT or
- *              POST /api/wifi/config at runtime.
+ *  Wi-Fi AP "MotorControl" / "motor1234" — always up.  The RECEIVER joins
+ *    this AP as a station; sender ⇄ receiver traffic is UDP on port 4210.
+ *    The phone app also joins this AP and talks HTTP to 192.168.4.1.
+ *  Wi-Fi STA — OPTIONAL.  Only started when home-router credentials are
+ *    set (STA_SSID_DEFAULT/STA_PASS_DEFAULT or POST /api/wifi/config).
+ *    With no credentials the radio runs AP-only, which is the most stable
+ *    mode (an AP+STA radio that keeps scanning for a missing router
+ *    interrupts the AP and drops packets).
+ *
+ *  Receiver address: learned from the source IP of its status packets
+ *    (the phone is ALSO a station, so "first station in the list" would
+ *    be wrong).  Until the first status arrives, commands go to the AP
+ *    subnet broadcast address.
  *
  *  ── Pins ──────────────────────────────────────────────────────────────
- *  D1 (GPIO5)  → Button ON  (INPUT_PULLUP)
- *  D2 (GPIO4)  → Button OFF (INPUT_PULLUP)
- *  D3 (GPIO0)  → LED ON  (green)
- *  GPIO3 / RX  → LED OFF (red)
+ *  D1 (GPIO5)  → Button ON  (to GND, INPUT_PULLUP)
+ *  D2 (GPIO4)  → Button OFF (to GND, INPUT_PULLUP)
+ *  D3 (GPIO0)  → LED ON  (HIGH = motor ON,  only while receiver link is fresh)
+ *  D7 (GPIO13) → LED OFF (HIGH = motor OFF, only while receiver link is fresh)
+ *  D4 (GPIO2)  → On-board LED, active LOW: solid = receiver joined the AP,
+ *                brief OFF blink on every button press / command sent
  *
  *  ── REST endpoints ────────────────────────────────────────────────────
  *  GET  /api/status
@@ -30,23 +41,25 @@
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#include <WiFiUdp.h>
 #include <EEPROM.h>
 
 extern "C" {
-  #include <espnow.h>
   #include <user_interface.h>
 }
 
 // ── Pins ──────────────────────────────────────────────────────────────────
 #define PIN_BTN_ON   D1   // GPIO5
 #define PIN_BTN_OFF  D2   // GPIO4
-#define PIN_LED_ON   D3   // GPIO0  green LED
-#define PIN_LED_OFF  3    // GPIO3 (RX) red LED
+#define PIN_LED_ON   D3   // GPIO0  green LED  (motor ON)
+#define PIN_LED_OFF  D7   // GPIO13 red LED    (motor OFF)
+#define PIN_LED_LINK 2    // GPIO2  on-board LED, active LOW (= D4)
 
 // ── Wi-Fi AP ──────────────────────────────────────────────────────────────
 static const char*   AP_SSID = "MotorControl";
 static const char*   AP_PASS = "motor1234";
-static const uint8_t WIFI_CH = 1;
+static const uint8_t WIFI_CH = 1;           // AP channel (follows router if STA is joined)
+static const uint16_t UDP_PORT = 4210;      // same port on sender and receiver
 
 // ── Wi-Fi STA (home router) ───────────────────────────────────────────────
 #ifndef STA_SSID_DEFAULT
@@ -110,8 +123,7 @@ static void logFmt(const char* fmt, ...) {
   logAdd(buf);
 }
 
-// ── ESP-NOW packets ────────────────────────────────────────────────────────
-static uint8_t BCAST_MAC[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+// ── Packets (sent as UDP datagrams) ───────────────────────────────────────
 
 typedef struct __attribute__((packed)) {
   uint8_t type; uint8_t cmd; uint32_t seq;
@@ -120,6 +132,7 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
   uint8_t type; float current; uint8_t motorOn;
   uint8_t waterOk; uint8_t stall; uint32_t seq;
+  int8_t  rssi;                                     // receiver's Wi-Fi RSSI to this AP (dBm)
 } StatusPacket;                                     // 0x02
 
 typedef struct __attribute__((packed)) {
@@ -153,23 +166,21 @@ static uint32_t       g_cmdSeq   = 0;
 static bool           g_linkLost = true;
 static unsigned long  g_lastRxMs = 0;
 
-// ── ESP-NOW RSSI (promiscuous sniffer) ────────────────────────────────────
-static volatile int8_t  g_lastRssi         = 0;
-static volatile bool    g_hasRssi          = false;
-static uint8_t          g_receiverMac[6]   = {0};
-static volatile bool    g_receiverMacKnown = false;  // volatile: written in recv CB, read in IRAM ISR
+// ── Wi-Fi link to receiver ─────────────────────────────────────────────────
+static WiFiUDP          g_udp;
+static IPAddress        g_receiverIp;                // learned from its status packets
+static bool             g_receiverIpKnown = false;
+static volatile int8_t  g_lastRssi        = 0;       // receiver ↔ AP, dBm
+static volatile bool    g_hasRssi         = false;
+static unsigned long    g_blinkUntil      = 0;       // on-board LED blink (command sent)
+static unsigned long    g_staLastTryMs    = 0;
+static bool             g_needResync      = false;   // push timer/schedule/time when receiver (re)appears
+static bool             g_pendingAutoOn   = false;   // auto-restart ON, sent once receiver is heard
 
 // ── Button debounce ────────────────────────────────────────────────────────
 static uint8_t       g_btnOnState  = 0, g_btnOffState = 0;
 static unsigned long g_btnOnMs     = 0, g_btnOffMs    = 0;
 #define DEBOUNCE_MS 50UL
-
-// ── LEDs ──────────────────────────────────────────────────────────────────
-#define BLINK_ON_MS   80UL
-#define BLINK_OFF_MS 120UL
-static volatile bool g_blinkReq     = false;
-static unsigned long g_blinkPhaseMs = 0;
-static uint8_t       g_blinkPhase   = 0;
 
 // ── Timer state ───────────────────────────────────────────────────────────
 static bool          g_timerActive     = false;
@@ -201,24 +212,8 @@ static uint8_t epochDayBit(uint32_t e) {
 // ── HTTP server ────────────────────────────────────────────────────────────
 static ESP8266WebServer server(80);
 
-// ── Safe EEPROM commit ────────────────────────────────────────────────────
-// ALWAYS disable the promiscuous IRAM ISR before committing to flash.
-// If the sniffer fires during spi_flash_write() it can corrupt the write
-// or cause a crash/WDT reset.
-static void safeCommit() {
-  wifi_promiscuous_enable(0);
-  EEPROM.commit();
-  wifi_promiscuous_enable(1);
-}
-// Wrapper that replaces standalone eeSave() calls outside the motor command
-// (which already manages its own promiscuous disable/enable window).
-static void safeSave() {
-  wifi_promiscuous_enable(0);
-  eeSave();
-  wifi_promiscuous_enable(1);
-}
-
 // Forward declarations
+static void eeSave();
 static void sendMotorCommandInternal(bool on);
 static void sendTimerPacket();
 static void updateLEDs();
@@ -274,16 +269,17 @@ static void eeLoad() {
     g_timerActive   = true;
     g_timerLastTick = millis();
     logFmt("[SEND] auto-restart timer: %lus remaining", (unsigned long)g_timerRemain);
-    sendTimerPacket();
   }
-  if (motorWasOn && g_timerAutoRst) sendMotorCommandInternal(true);
+  // The receiver has not joined our AP yet at boot, so anything sent now would
+  // be lost.  Defer: the loop sends it as soon as the receiver is heard.
+  if (motorWasOn && g_timerAutoRst) g_pendingAutoOn = true;
 }
 
 static void eeSaveStaCreds() {
   for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_SSID + i, (uint8_t)g_staSSID[i]);
   for (int i = 0; i < 33; i++) EEPROM.write(EE_STA_PASS + i, (uint8_t)g_staPass[i]);
   EEPROM.write(EE_STA_MAGIC, EE_STA_MAGIC_VAL);
-  safeCommit();  // disable IRAM ISR before flash write
+  EEPROM.commit();
   logFmt("[WIFI] STA creds saved  SSID='%s'", g_staSSID);
 }
 
@@ -301,11 +297,24 @@ static void eeLoadStaCreds() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  ESP-NOW send (always broadcast)
+//  Wi-Fi / UDP transport
 // ══════════════════════════════════════════════════════════════════════════
 
+static inline bool isApSubnet(IPAddress ip) {
+  IPAddress me = WiFi.softAPIP();
+  return ip[0] == me[0] && ip[1] == me[1] && ip[2] == me[2];
+}
+
+// Unicast to the receiver once its address is known (gets 802.11 ACK/retries);
+// before that, broadcast on the AP subnet.  Never guesses "first station":
+// the phone is a station too.
 static void commsSend(uint8_t* data, size_t len) {
-  esp_now_send(BCAST_MAC, data, len);
+  IPAddress dst;
+  if (g_receiverIpKnown) dst = g_receiverIp;
+  else { IPAddress me = WiFi.softAPIP(); dst = IPAddress(me[0], me[1], me[2], 255); }
+  g_udp.beginPacket(dst, UDP_PORT);
+  g_udp.write(data, len);
+  g_udp.endPacket();
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -322,37 +331,61 @@ static void processIncomingPacket(uint8_t* data, int len) {
       bool prevMotor = g_motorOn;
       bool prevWater = g_waterOk;
       bool prevStall = g_stall;
+      if (g_linkLost) {                       // first packet, or back after ≥10 s silence
+        g_needResync = true;
+        logAdd("[WIFI] receiver link UP");
+      }
 
       g_motorOn  = (pkt.motorOn != 0);
       g_currentA = pkt.current;
       g_waterOk  = (pkt.waterOk != 0);
       g_stall    = (pkt.stall   != 0);
+      if (pkt.rssi < 0) { g_lastRssi = pkt.rssi; g_hasRssi = true; }
       g_lastRxMs = millis();
       g_linkLost = false;
-      g_blinkReq = true;
 
       if (prevMotor != g_motorOn)
         logFmt("[RECV] relay → %s  I=%.2fA", g_motorOn ? "ON" : "OFF", g_currentA);
       if (prevWater != g_waterOk)
-        logFmt("[RECV] water → %s", g_waterOk ? "OK ✔" : "NO ✗");
+        logFmt("[RECV] water → %s", g_waterOk ? "YES" : "NO");
       if (!prevStall && g_stall)
         logAdd("[RECV] ⚠ STALL — motor ON, current ≈ 0 for 5 s");
       if (prevStall && !g_stall)
         logAdd("[RECV] stall cleared");
-
-      updateLEDs();
       break;
     }
     case 0x03: {
       if (len < 2) return;
-      LogPacket pkt; memcpy(&pkt, data, min((size_t)len, sizeof(pkt)));
+      LogPacket pkt; memset(&pkt, 0, sizeof(pkt));
+      memcpy(&pkt, data, min((size_t)len, sizeof(pkt)));
       pkt.msg[sizeof(pkt.msg)-1] = '\0';
       logAdd(pkt.msg);
-      g_blinkReq = true;
       g_lastRxMs = millis();
+      g_linkLost = false;
       break;
     }
     default: break;
+  }
+}
+
+// Drain pending datagrams.  Only hosts on the AP subnet are accepted, and
+// the receiver's address is learned from its status/log packets.
+static void pollUdp() {
+  for (uint8_t n = 0; n < 6; n++) {
+    int len = g_udp.parsePacket();
+    if (len <= 0) return;
+    uint8_t buf[250];
+    int got = g_udp.read(buf, sizeof(buf));
+    if (got <= 0) continue;
+    IPAddress from = g_udp.remoteIP();
+    if (!isApSubnet(from)) continue;
+    if (buf[0] == 0x02 || buf[0] == 0x03) {          // only the receiver sends these
+      if (!g_receiverIpKnown || g_receiverIp != from) {
+        g_receiverIp = from; g_receiverIpKnown = true;
+        logFmt("[WIFI] receiver at %s", from.toString().c_str());
+      }
+      processIncomingPacket(buf, got);
+    }
   }
 }
 
@@ -360,24 +393,17 @@ static void processIncomingPacket(uint8_t* data, int len) {
 //  LED helpers
 // ══════════════════════════════════════════════════════════════════════════
 
+// "Joined" = at least one station on the AP.  "Fresh" = receiver status heard
+// within 3 s.  Motor LEDs show the REAL motor state only while fresh; both
+// go dark when the link is down so a stale LED can never lie.
 static void updateLEDs() {
-  static bool lastOn = false;
-  if (g_motorOn == lastOn) return;
-  lastOn = g_motorOn;
-  digitalWrite(PIN_LED_ON,  g_motorOn ? HIGH : LOW);
-  digitalWrite(PIN_LED_OFF, g_motorOn ? LOW  : HIGH);
-}
-
-static void handleBlink() {
   unsigned long now = millis();
-  if (g_blinkReq && g_blinkPhase == 0) {
-    g_blinkReq = false; g_blinkPhase = 1; g_blinkPhaseMs = now;
-    digitalWrite(PIN_LED_ON, LOW); digitalWrite(PIN_LED_OFF, LOW);
-  }
-  if (g_blinkPhase == 1 && (now - g_blinkPhaseMs) >= BLINK_ON_MS) {
-    g_blinkPhase = 2; g_blinkPhaseMs = now; updateLEDs();
-  }
-  if (g_blinkPhase == 2 && (now - g_blinkPhaseMs) >= BLINK_OFF_MS) g_blinkPhase = 0;
+  bool joined   = WiFi.softAPgetStationNum() > 0;
+  bool fresh    = joined && g_lastRxMs > 0 && (now - g_lastRxMs) < 3000UL;
+  bool blinking = (long)(now - g_blinkUntil) < 0;
+  digitalWrite(PIN_LED_LINK, (joined && !blinking) ? LOW : HIGH);     // active LOW
+  digitalWrite(PIN_LED_ON,  (fresh &&  g_motorOn) ? HIGH : LOW);
+  digitalWrite(PIN_LED_OFF, (fresh && !g_motorOn) ? HIGH : LOW);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -418,51 +444,21 @@ static void sendTimeSyncPacket() {
 static void sendMotorCommandInternal(bool on) {
   CmdPacket pkt;
   pkt.type = 0x01; pkt.cmd = on ? 0x01 : 0x02; pkt.seq = ++g_cmdSeq;
-  logFmt("[SEND] Motor %s  seq=%lu  via ESP-NOW",
-         on ? "ON" : "OFF", (unsigned long)g_cmdSeq);
-  // Pause promiscuous sniffer: prevents the IRAM callback from firing
-  // while the flash is locked by EEPROM.commit(), and ensures reliable sends.
-  wifi_promiscuous_enable(0);
-  // 3× retries for broadcast reliability
-  for (uint8_t i = 0; i < 3; i++) { commsSend((uint8_t*)&pkt, sizeof(pkt)); delay(12); }
+  g_blinkUntil = millis() + 200UL;
+  if (WiFi.softAPgetStationNum() == 0) {
+    logFmt("[SEND] Motor %s NOT sent — nothing joined the AP", on ? "ON" : "OFF");
+    return;
+  }
+  logFmt("[SEND] Motor %s  seq=%lu  → %s", on ? "ON" : "OFF", (unsigned long)g_cmdSeq,
+         g_receiverIpKnown ? g_receiverIp.toString().c_str() : "broadcast");
+  // 3 copies (receiver drops repeats by seq) — covers a lost datagram.
+  for (uint8_t i = 0; i < 3; i++) {
+    commsSend((uint8_t*)&pkt, sizeof(pkt));
+    delay(40);
+    pollUdp();                         // keep draining while we wait
+  }
   EEPROM.write(EE_MOTOR_WAS_ON, on ? 1 : 0);
   EEPROM.commit();
-  wifi_promiscuous_enable(1);  // resume RSSI sniffer
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  Promiscuous sniffer — captures RSSI of ESP-NOW frames from receiver
-// ══════════════════════════════════════════════════════════════════════════
-
-// ESP8266 rx_ctrl is 12 bytes; first byte is signed RSSI.
-struct PktRxCtrl_t { int8_t rssi; uint8_t pad[11]; };
-
-static void ICACHE_RAM_ATTR rssiSnifferCb(uint8_t *buf, uint16_t len) {
-  // buf = [PktRxCtrl_t(12)] + [802.11 frame]
-  // Management Action frames (which ESP-NOW uses):
-  //   FC(2) DUR(2) DA(6) SA(6) BSSID(6) SEQ(2) ...
-  //   Source MAC (SA) starts at offset 12+10 = 22 within buf
-  if (len < 28 || !g_receiverMacKnown) return;
-  const uint8_t *sa = buf + 22;
-  if (memcmp(sa, g_receiverMac, 6) != 0) return;
-  const PktRxCtrl_t *ctrl = (const PktRxCtrl_t *)buf;
-  g_lastRssi = ctrl->rssi;
-  g_hasRssi  = true;
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  ESP-NOW callbacks
-// ══════════════════════════════════════════════════════════════════════════
-
-void espnowOnSend(uint8_t* /*mac*/, uint8_t /*status*/) { }
-
-void espnowOnRecv(uint8_t* mac, uint8_t* data, uint8_t len) {
-  // Save receiver MAC on first ESP-NOW packet so the sniffer can filter for it
-  if (!g_receiverMacKnown && mac != nullptr) {
-    memcpy(g_receiverMac, mac, 6);
-    g_receiverMacKnown = true;
-  }
-  processIncomingPacket(data, (int)len);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -479,13 +475,13 @@ static void handleTimerTick() {
     g_timerRemain = 0; g_timerActive = false;
     logAdd("[SEND] ⏰ timer expired — Motor OFF");
     sendMotorCommandInternal(false);
-    EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); safeCommit();
+    EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); EEPROM.commit();
     sendTimerPacket();
   } else {
     g_timerRemain -= (uint32_t)elapsed;
     if (now - g_timerLastSaveMs >= TIMER_SAVE_INTERVAL_MS) {
       g_timerLastSaveMs = now;
-      eeWriteU32(EE_TIMER_REM, g_timerRemain); safeCommit();
+      eeWriteU32(EE_TIMER_REM, g_timerRemain); EEPROM.commit();
     }
   }
 }
@@ -544,12 +540,12 @@ static String buildStatusJson() {
   j += "\"waterOk\":"    + String(g_waterOk  ? "true":"false") + ",";
   j += "\"stall\":"      + String(g_stall    ? "true":"false") + ",";
   j += "\"linkOk\":"     + String(isLinkOk() ? "true":"false") + ",";
-  j += "\"commsMode\":\"ESP-NOW\",";
+  j += "\"commsMode\":\"WiFi\",";
   if (g_staConnected && WiFi.status() == WL_CONNECTED)
     j += "\"staIp\":\"" + WiFi.localIP().toString() + "\",";
   else
     j += "\"staIp\":null,";
-  // MODULE E: ESP-NOW RSSI from promiscuous sniffer (dBm, negative values)
+  // MODULE E: Wi-Fi RSSI of the receiver ↔ this AP (dBm, negative), reported by the receiver
   if (g_hasRssi)
     j += "\"rssi\":" + String((int)g_lastRssi);
   else
@@ -585,7 +581,12 @@ void handleWifiConfig() {
   ssid.toCharArray(g_staSSID, sizeof(g_staSSID));
   pass.toCharArray(g_staPass, sizeof(g_staPass));
   eeSaveStaCreds();
+  if (WiFi.getMode() != WIFI_AP_STA) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(AP_SSID, AP_PASS, WIFI_CH);   // re-assert AP after the mode change
+  }
   WiFi.begin(g_staSSID, g_staPass);
+  g_staLastTryMs = millis();
   logFmt("[WIFI] STA: connecting to '%s'…", g_staSSID);
   addCorsHeaders();
   server.send(200,"application/json","{\"success\":true,\"message\":\"Connecting — poll /api/wifi/status in 10s\"}");
@@ -638,7 +639,7 @@ void handleTimerSet() {
   bool     ar  = (autIdx >= 0) && (body.substring(autIdx + 14).toInt() != 0);
   g_timerTotal = sec; g_timerRemain = sec; g_timerAutoRst = ar;
   g_timerActive = true; g_timerLastTick = millis(); g_timerLastSaveMs = 0;
-  safeSave();
+  eeSave();
   logFmt("[TIMER] set %lus  autoRestart=%d", (unsigned long)sec, (int)ar);
   sendTimerPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
@@ -646,7 +647,7 @@ void handleTimerSet() {
 
 void handleTimerCancel() {
   g_timerActive = false; g_timerRemain = 0;
-  EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); safeCommit();
+  EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); EEPROM.commit();
   logAdd("[TIMER] cancelled");
   sendTimerPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
@@ -692,14 +693,14 @@ void handleSchedPush() {
     pos = body.indexOf("{", pos + 1);   // advance past current entry
     if (pos < 0) { if (i + 1 < g_schedCount) g_schedCount = i + 1; break; }
   }
-  safeSave();
+  eeSave();
   logFmt("[SCHED] pushed %d schedule(s)", (int)g_schedCount);
   sendSchedPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }
 
 void handleSchedClear() {
-  g_schedCount = 0; memset(g_scheds, 0, sizeof(g_scheds)); safeSave();
+  g_schedCount = 0; memset(g_scheds, 0, sizeof(g_scheds)); eeSave();
   logAdd("[SCHED] cleared"); sendSchedPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }
@@ -713,7 +714,7 @@ void handleTimeSync() {
   g_epochMs = millis();
   g_rtcEnabled = (rtcIdx >= 0) && (body.substring(rtcIdx + 13).toInt() != 0);
   EEPROM.write(EE_RTC_FLAG, g_rtcEnabled ? 1 : 0);
-  eeWriteU32(EE_EPOCH, g_epoch); safeCommit();
+  eeWriteU32(EE_EPOCH, g_epoch); EEPROM.commit();
   sendTimeSyncPacket();
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }
@@ -737,52 +738,54 @@ void handleDryTimeout() {
 // ══════════════════════════════════════════════════════════════════════════
 
 void setup() {
-  Serial.begin(115200, SERIAL_8N1, SERIAL_TX_ONLY);
+  Serial.begin(115200);
   delay(100);
-  logAdd("[SEND] boot v4  ESP-NOW only");
+  logAdd("[SEND] boot v5  Wi-Fi (UDP)");
 
   pinMode(PIN_BTN_ON,  INPUT_PULLUP);
   pinMode(PIN_BTN_OFF, INPUT_PULLUP);
   pinMode(PIN_LED_ON,  OUTPUT);
   pinMode(PIN_LED_OFF, OUTPUT);
-  digitalWrite(PIN_LED_ON, LOW); digitalWrite(PIN_LED_OFF, HIGH);
+  pinMode(PIN_LED_LINK, OUTPUT);
+  digitalWrite(PIN_LED_ON, LOW); digitalWrite(PIN_LED_OFF, LOW);
+  digitalWrite(PIN_LED_LINK, HIGH);
+
+  // Command sequence numbers start at a random point so that after a sender
+  // reboot the receiver's "same seq = duplicate" filter can't swallow the
+  // first command (seq 1 again).
+  g_cmdSeq = RANDOM_REG32;
 
   EEPROM.begin(EE_SIZE);
-
-  // ── Wi-Fi AP+STA ──────────────────────────────────────────────────────
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID, AP_PASS, WIFI_CH);
-  WiFi.setOutputPower(20.5f);       // max power: 20.5 dBm
-  wifi_set_phy_mode(PHY_MODE_11B);  // 802.11b for best range
-  logFmt("[SEND] AP  IP=%s  SSID=%s", WiFi.softAPIP().toString().c_str(), AP_SSID);
-
   eeLoadStaCreds();
-  if (g_staSSID[0] != '\0') {
+
+  // ── Wi-Fi ─────────────────────────────────────────────────────────────
+  // AP-only unless router credentials exist (most stable for the receiver).
+  WiFi.persistent(false);
+  bool wantSta = (g_staSSID[0] != '\0');
+  WiFi.mode(wantSta ? WIFI_AP_STA : WIFI_AP);
+  WiFi.softAP(AP_SSID, AP_PASS, WIFI_CH);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);   // modem sleep drops incoming UDP
+  WiFi.setOutputPower(20.5f);           // max power: 20.5 dBm
+  wifi_set_phy_mode(PHY_MODE_11B);      // 802.11b for best range
+  logFmt("[SEND] AP  IP=%s  SSID=%s  mode=%s", WiFi.softAPIP().toString().c_str(),
+         AP_SSID, wantSta ? "AP+STA" : "AP-only");
+
+  if (wantSta) {
     logFmt("[WIFI] STA connecting to '%s'…", g_staSSID);
     WiFi.begin(g_staSSID, g_staPass);
+    g_staLastTryMs = millis();
     uint32_t t0 = millis();
     while (WiFi.status() != WL_CONNECTED && (millis() - t0) < 8000UL) delay(200);
     if (WiFi.status() == WL_CONNECTED) {
       g_staConnected = true;
       logFmt("[WIFI] STA connected  IP=%s", WiFi.localIP().toString().c_str());
     } else {
-      logFmt("[WIFI] STA '%s' not reachable — AP-only (192.168.4.1)", g_staSSID);
+      logFmt("[WIFI] STA '%s' not reachable — AP still up (192.168.4.1)", g_staSSID);
     }
   }
 
-  // ── ESP-NOW init (3 retries) ─────────────────────────────────────────
-  int tries = 3;
-  while (esp_now_init() != 0 && tries-- > 0) { logAdd("[SEND] ESP-NOW retry…"); delay(500); }
-  if (tries < 0) { logAdd("[SEND] ESP-NOW FAILED — reboot"); delay(1000); ESP.restart(); }
-  esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
-  esp_now_register_send_cb(espnowOnSend);
-  esp_now_register_recv_cb(espnowOnRecv);
-  // Enable promiscuous sniffer to capture RSSI of ESP-NOW frames from receiver
-  wifi_set_promiscuous_rx_cb(rssiSnifferCb);
-  wifi_promiscuous_enable(1);
-  esp_now_add_peer(BCAST_MAC, ESP_NOW_ROLE_COMBO, WIFI_CH, nullptr, 0);
-  logAdd("[SEND] ESP-NOW ready  power=20.5dBm  ch=1");
+  g_udp.begin(UDP_PORT);
+  logFmt("[SEND] UDP listening on %u", (unsigned)UDP_PORT);
 
   eeLoad();
 
@@ -826,7 +829,7 @@ void setup() {
   delay(300);
 
   updateLEDs();
-  logAdd("[SEND] ready — ESP-NOW only");
+  logAdd("[SEND] ready — Wi-Fi only");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -835,13 +838,35 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  pollUdp();
   unsigned long now = millis();
   g_staConnected = (WiFi.status() == WL_CONNECTED);
+
+  // ── Home-router STA retry (rare: every scan briefly disturbs the AP) ──
+  if (g_staSSID[0] && !g_staConnected && (now - g_staLastTryMs) > 60000UL) {
+    g_staLastTryMs = now;
+    WiFi.begin(g_staSSID, g_staPass);
+  }
 
   // ── Link-lost flag ────────────────────────────────────────────────────
   if (g_lastRxMs > 0 && (now - g_lastRxMs) > 10000UL && !g_linkLost) {
     g_linkLost = true;
     logAdd("[SEND] ⚠ link lost (no RX from receiver)");
+  }
+
+  // ── Receiver just (re)appeared: bring it up to date ───────────────────
+  if (g_needResync && !g_linkLost) {
+    g_needResync = false;
+    if (g_epoch != 0)   sendTimeSyncPacket();
+    if (g_schedCount)   sendSchedPacket();
+    if (g_timerActive)  sendTimerPacket();   // never send "inactive": it would cancel
+                                             // the receiver's own running countdown
+    logAdd("[SEND] receiver resynced (time / schedule / timer)");
+  }
+  if (g_pendingAutoOn && !g_linkLost && g_lastRxMs > 0) {
+    g_pendingAutoOn = false;
+    logAdd("[SEND] auto-restart: Motor ON");
+    sendMotorCommandInternal(true);
   }
 
   // ── Button ON ─────────────────────────────────────────────────────────
@@ -872,5 +897,5 @@ void loop() {
 
   handleTimerTick();
   handleScheduler();
-  handleBlink();
+  updateLEDs();
 }

@@ -26,7 +26,7 @@ import com.motordrive.esp32.data.MotorState
 import com.motordrive.esp32.data.PendingAlert
 import com.motordrive.esp32.databinding.FragmentDashboardBinding
 import com.motordrive.esp32.modules.CurrentModule
-import com.motordrive.esp32.modules.EspNowRssiModule
+import com.motordrive.esp32.modules.WifiRssiModule
 import com.motordrive.esp32.modules.VoltageModule
 import com.motordrive.esp32.modules.WaterFlowModule
 import com.motordrive.esp32.viewmodel.DashboardViewModel
@@ -42,7 +42,7 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
     private var voltageModule: VoltageModule?     = null
     private var currentModule: CurrentModule?     = null
     private var waterModule:   WaterFlowModule?   = null
-    private var rssiModule:    EspNowRssiModule?  = null
+    private var rssiModule:    WifiRssiModule?  = null
     private var alertsShown = false
 
     private val notifPermLauncher = registerForActivityResult(
@@ -104,9 +104,9 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
             b.moduleWaterContainer.addView(v); waterModule = WaterFlowModule(v)
         } else b.moduleWaterContainer.isVisible = false
 
-        if (FeatureConfig.ENABLE_ESPNOW_RSSI) {
-            val v = inf.inflate(R.layout.module_espnow_rssi, b.moduleRssiContainer, false)
-            b.moduleRssiContainer.addView(v); rssiModule = EspNowRssiModule(v)
+        if (FeatureConfig.ENABLE_WIFI_RSSI) {
+            val v = inf.inflate(R.layout.module_wifi_rssi, b.moduleRssiContainer, false)
+            b.moduleRssiContainer.addView(v); rssiModule = WifiRssiModule(v)
         } else b.moduleRssiContainer.isVisible = false
     }
 
@@ -150,14 +150,14 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
         if (FeatureConfig.ENABLE_VOLTAGE_SENSORS) b.moduleVoltageContainer.isVisible = v.showVoltage
         if (FeatureConfig.ENABLE_CURRENT_SENSOR)  b.moduleCurrentContainer.isVisible = v.showCurrent
         if (FeatureConfig.ENABLE_WATER_FLOW)      b.moduleWaterContainer.isVisible   = v.showWater
-        if (FeatureConfig.ENABLE_ESPNOW_RSSI)     b.moduleRssiContainer.isVisible    = v.showRssi
+        if (FeatureConfig.ENABLE_WIFI_RSSI)     b.moduleRssiContainer.isVisible    = v.showRssi
     }
 
     private fun updateStatusCard(state: MotorState) {
 
         // ── Connection chip — just Connected / Disconnected ───────────────
         if (state.isConnected) {
-            val linkLabel = if (state.linkOk) "● Connected" else "◌ Connected  (RF down)"
+            val linkLabel = if (state.linkOk) "● Connected" else "◌ Connected  (ESP link down)"
             b.chipConnection.text = linkLabel
             b.chipConnection.chipBackgroundColor = ColorStateList.valueOf(
                 requireContext().getColor(

@@ -152,12 +152,12 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.sensorVoltageRow.isVisible = FeatureConfig.ENABLE_VOLTAGE_SENSORS
         b.sensorCurrentRow.isVisible = FeatureConfig.ENABLE_CURRENT_SENSOR
         b.sensorWaterRow.isVisible   = FeatureConfig.ENABLE_WATER_FLOW
-        b.sensorRssiRow.isVisible    = FeatureConfig.ENABLE_ESPNOW_RSSI
+        b.sensorRssiRow.isVisible    = FeatureConfig.ENABLE_WIFI_RSSI
 
         val anySensorEnabled = FeatureConfig.ENABLE_VOLTAGE_SENSORS ||
                                FeatureConfig.ENABLE_CURRENT_SENSOR  ||
                                FeatureConfig.ENABLE_WATER_FLOW      ||
-                               FeatureConfig.ENABLE_ESPNOW_RSSI
+                               FeatureConfig.ENABLE_WIFI_RSSI
         b.dividerSensorModules.isVisible = anySensorEnabled
 
         b.dividerVoltageCurrent.isVisible =
@@ -167,7 +167,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             FeatureConfig.ENABLE_WATER_FLOW
         b.dividerWaterRssi.isVisible =
             (FeatureConfig.ENABLE_VOLTAGE_SENSORS || FeatureConfig.ENABLE_CURRENT_SENSOR ||
-             FeatureConfig.ENABLE_WATER_FLOW) && FeatureConfig.ENABLE_ESPNOW_RSSI
+             FeatureConfig.ENABLE_WATER_FLOW) && FeatureConfig.ENABLE_WIFI_RSSI
     }
 
     private fun populateFields() {
@@ -482,7 +482,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
             val start = sb.length
             sb.append(line).append('\n')
             val color = when {
-                line.contains("[SEND]") || line.contains("[LORA]") ||
+                line.contains("[SEND]") || line.contains("[WIFI]") ||
                 line.contains("[COMMS]") || line.contains("[SCHED]") ||
                 line.contains("[TIMER]")  -> colSend
                 line.contains("[RECV]")   -> colRecv

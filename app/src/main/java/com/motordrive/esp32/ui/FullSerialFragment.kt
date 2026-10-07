@@ -31,8 +31,8 @@ import kotlinx.coroutines.launch
 /**
  * Full-screen ESP sender serial-log viewer.
  * Polls /api/logs every 2 s and colour-codes lines by origin:
- *   [SEND] / [LORA] / [COMMS] / [SCHED] / [TIMER]  →  cyan  (Sender ESP)
- *   [RECV]                                           →  green (Receiver ESP, forwarded via ESP-NOW)
+ *   [SEND] / [WIFI] / [COMMS] / [SCHED] / [TIMER]  →  cyan  (Sender ESP)
+ *   [RECV]                                           →  green (Receiver ESP, forwarded over Wi-Fi)
  *   anything else                                    →  dim grey
  */
 class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
@@ -40,6 +40,13 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
     private var _b: FragmentFullLogBinding? = null
     private val b get() = _b!!
     private val vm: DashboardViewModel by activityViewModels()
+
+    // Lines as last fetched from the ESP, and the snapshot taken when Clear was
+    // pressed.  The ESP keeps a 30-line ring buffer, so without this the next
+    // poll (2 s later) would simply put the cleared lines back.
+    private var lastFetched: List<String> = emptyList()
+    private var clearBaseline: List<String>? = null
+    private var shownLines: List<String> = emptyList()
 
     // Colour palette for log origins
     private val colSender   = Color.parseColor("#4FC3F7")  // light blue  — Sender
@@ -58,8 +65,11 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
         b.toolbar.setNavigationOnClickListener { findNavController().navigateUp() }
 
         b.btnClearLog.setOnClickListener {
+            clearBaseline = lastFetched
+            shownLines    = emptyList()
             b.tvLogContent.text = ""
             b.tvLineCount.text  = "0 lines"
+            Toast.makeText(requireContext(), "Cleared", Toast.LENGTH_SHORT).show()
         }
         b.btnCopy.setOnClickListener { copyToClipboard() }
 
@@ -74,10 +84,16 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (isActive) {
                     Esp32Repository(vm.config.value).getLogs()
-                        .onSuccess { lines ->
+                        .onSuccess { fetched ->
                             if (_b == null) return@onSuccess
+                            lastFetched = fetched
+                            val base  = clearBaseline
+                            val lines = if (base == null) fetched
+                                        else fetched.drop(overlap(base, fetched))
+                            shownLines = lines
                             if (lines.isEmpty()) {
-                                b.tvLogContent.text = "— waiting for ESP log —"
+                                b.tvLogContent.text =
+                                    if (base == null) "— waiting for ESP log —" else ""
                                 b.tvLineCount.text  = "0 lines"
                             } else {
                                 b.tvLogContent.setText(
@@ -92,14 +108,30 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
                                 }
                             }
                         }
-                        .onFailure {
-                            if (_b != null)
-                                b.tvLineCount.text = "⚠ ${it.message?.take(40)}"
+                        .onFailure { err ->
+                            if (_b == null) return@onFailure
+                            shownLines = emptyList()
+                            b.tvLineCount.text = "offline"
+                            b.tvLogContent.text =
+                                "⚠ Can't reach the ESP at ${vm.config.value.baseUrl}\n" +
+                                "   ${err.message?.take(80)}\n\n" +
+                                "• Join the \"MotorControl\" Wi-Fi (password motor1234)\n" +
+                                "• If Android says \"no internet\", choose to stay connected\n" +
+                                "• Turn off any VPN while using the app"
                         }
                     delay(2_000L)
                 }
             }
         }
+    }
+
+    /** Longest k such that the last k lines of [old] equal the first k lines of [new]. */
+    private fun overlap(old: List<String>, new: List<String>): Int {
+        val max = minOf(old.size, new.size)
+        for (k in max downTo 1) {
+            if (old.subList(old.size - k, old.size) == new.subList(0, k)) return k
+        }
+        return 0
     }
 
     // ── Colour-coded log builder ──────────────────────────────────────────
@@ -137,7 +169,7 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
     }
 
     private fun lineColor(line: String): Int = when {
-        line.contains("[SEND]") || line.contains("[LORA]") ||
+        line.contains("[SEND]") || line.contains("[WIFI]") ||
         line.contains("[COMMS]") || line.contains("[SCHED]") ||
         line.contains("[TIMER]")  -> colSender
         line.contains("[RECV]")   -> colReceiver
@@ -146,7 +178,8 @@ class FullSerialFragment : Fragment(R.layout.fragment_full_log) {
 
     // ── Clipboard ─────────────────────────────────────────────────────────
     private fun copyToClipboard() {
-        val text = b.tvLogContent.text?.toString() ?: return
+        // Copy the real log lines (not the legend / error text shown on screen)
+        val text = shownLines.joinToString("\n")
         if (text.isBlank()) {
             Toast.makeText(requireContext(), "Nothing to copy", Toast.LENGTH_SHORT).show()
             return

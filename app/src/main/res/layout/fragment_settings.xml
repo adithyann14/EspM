@@ -305,7 +305,7 @@
                             android:layout_height="1dp"
                             android:layout_marginHorizontal="12dp" />
 
-                        <!-- MODULE E - ESP-NOW RSSI -->
+                        <!-- MODULE E - Wi-Fi RSSI -->
                         <LinearLayout
                             android:id="@+id/sensorRssiRow"
                             android:layout_width="match_parent"
@@ -324,13 +324,13 @@
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="ESP-NOW Signal Strength"
+                                    android:text="Wi-Fi Signal Strength"
                                     android:textAppearance="?attr/textAppearanceBodyMedium" />
 
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="Show RSSI (dBm) of receiver link on dashboard"
+                                    android:text="Show motor-ESP Wi-Fi RSSI (dBm) on dashboard"
                                     android:textAppearance="?attr/textAppearanceBodySmall"
                                     android:textColor="?attr/colorOnSurfaceVariant" />
                             </LinearLayout>
