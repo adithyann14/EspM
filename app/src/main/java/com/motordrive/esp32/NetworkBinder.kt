@@ -27,8 +27,8 @@ object NetworkBinder {
     private var started = false
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) { wifi = network; apply() }
-        override fun onLost(network: Network) { if (wifi == network) { wifi = null; apply() } }
+        override fun onAvailable(network: Network) { wifi = network; applyBinding() }
+        override fun onLost(network: Network) { if (wifi == network) { wifi = null; applyBinding() } }
     }
 
     @Synchronized
@@ -52,11 +52,11 @@ object NetworkBinder {
     @Synchronized
     fun setTarget(baseUrl: String) {
         wantLocal = isLocalUrl(baseUrl)
-        apply()
+        applyBinding()
     }
 
     @Synchronized
-    private fun apply() {
+    private fun applyBinding() {
         val manager = cm ?: return
         val target = if (wantLocal) wifi else null
         runCatching { manager.bindProcessToNetwork(target) }
