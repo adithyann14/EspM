@@ -94,7 +94,9 @@ class Esp32Repository(private val config: ConnectionConfig) {
     // ── Wi-Fi STA config ───────────────────────────────────────────────────────────
     /** Push home Wi-Fi credentials to the ESP8266 so it can join the LAN. */
     suspend fun configureWifi(ssid: String, pass: String): Result<Unit> = io {
-        val body = """{"ssid":"$ssid","pass":"$pass"}"""
+        // A quote or backslash in the SSID/password must be escaped or the JSON breaks.
+        fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"")
+        val body = """{"ssid":"${esc(ssid)}","pass":"${esc(pass)}"}"""
         httpPostJson("${config.baseUrl}/api/wifi/config", body)
         Unit
     }
@@ -119,14 +121,16 @@ class Esp32Repository(private val config: ConnectionConfig) {
 
     // ── OTA ───────────────────────────────────────────────────────────────
     /**
-     * Asks the Sender to send a Wi-Fi (UDP) OTA-enable packet to the Receiver.
-     * The Receiver switches to AP mode "MCReceiver-OTA" and starts a
-     * password-protected HTTP update server for 5 minutes.
+     * Asks the Sender to open the Receiver's 5-minute OTA window (Wi-Fi/UDP).
+     * The Receiver stays on the "MotorControl" Wi-Fi and serves a
+     * password-protected update page at http://<receiverIp>/update.
+     * Returns the Receiver's IP address (empty if the sender did not report it).
      */
-    suspend fun enableReceiverOta(password: String): Result<Unit> = io {
-        val body = """{"pass":"${password}"}"""
-        httpPostJson("${config.baseUrl}/api/ota/receiver", body)
-        Unit
+    suspend fun enableReceiverOta(password: String): Result<String> = io {
+        val esc  = password.replace("\\", "\\\\").replace("\"", "\\\"")
+        val body = """{"pass":"$esc"}"""
+        val resp = httpPostJson("${config.baseUrl}/api/ota/receiver", body)
+        runCatching { JSONObject(resp).optString("receiverIp", "") }.getOrDefault("")
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────
@@ -163,7 +167,13 @@ class Esp32Repository(private val config: ConnectionConfig) {
             outputStream.write(bytes); outputStream.close()
         }
         try {
-            if (conn.responseCode !in 200..299) throw IOException("HTTP ${conn.responseCode}")
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                // Include the sender's {"error":"…"} text so the UI can say WHY.
+                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull()
+                val why = runCatching { JSONObject(err ?: "").optString("error", "") }.getOrDefault("")
+                throw IOException(if (why.isNotEmpty()) "HTTP $code — $why" else "HTTP $code")
+            }
             return runCatching { conn.inputStream.bufferedReader().readText() }.getOrDefault("")
         } finally { conn.disconnect() }
     }

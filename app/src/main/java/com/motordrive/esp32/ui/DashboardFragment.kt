@@ -187,6 +187,17 @@ class DashboardFragment : Fragment(R.layout.fragment_dashboard) {
 
         // ── Motor state banner  (stall takes priority) ────────────────────
         when {
+            // The sender is reachable but cannot hear the receiver: the motor state shown
+            // is only the LAST KNOWN one.  Never grey out OFF (or ON) on stale data — the
+            // pump may be running although the app thinks it is off.
+            state.isConnected && !state.linkOk -> {
+                b.motorStateBanner.text = if (state.motorOn) "?  MOTOR ON (last known) — ESP link down"
+                                          else               "?  MOTOR OFF (last known) — ESP link down"
+                b.motorStateBanner.setBackgroundColor(requireContext().getColor(R.color.value_warn))
+                b.motorStateBanner.setTextColor(requireContext().getColor(R.color.on_white))
+                b.btnMotorOn.isEnabled  = true
+                b.btnMotorOff.isEnabled = true
+            }
             state.motorOn && state.stall -> {
                 b.motorStateBanner.text = "⚠  MOTOR ON  —  STALL"
                 b.motorStateBanner.setBackgroundColor(requireContext().getColor(R.color.value_warn))

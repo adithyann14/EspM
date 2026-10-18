@@ -31,12 +31,19 @@ package com.motordrive.esp32
  *    The receiver reads WiFi.RSSI() of its link to the sender's AP and
  *    reports it in every status packet.
  *    Set FALSE only if not needed.
+ *
+ *  MODULE F  ·  ENABLE_RTC_SETTING   (DEAD CODE — no DS3231 driver in firmware)
+ *    Shows the "RTC module" switch in Settings → Sensors.
+ *    OFF (default) = the ESP uses PHONE TIME, synced by the app every 30 s.
+ *    ON only sets a flag that the ESPs store; with no RTC code in the
+ *    firmware it changes nothing, and the app keeps syncing phone time.
  * ════════════════════════════════════════════════════════════════
  */
 object FeatureConfig {
     const val ENABLE_VOLTAGE_SENSORS = false   // MODULE A — no firmware ADC support yet
-    const val ENABLE_CURRENT_SENSOR  = true    // MODULE B — ACS712 on A0, works
+    const val ENABLE_CURRENT_SENSOR  = false    // MODULE B — ACS712 on A0, works
     const val ENABLE_WATER_FLOW      = true    // MODULE C — active-LOW sensor
     const val ENABLE_SERVER_MODE     = true    // MODULE D — custom base URL
     const val ENABLE_WIFI_RSSI     = true    // MODULE E — Wi-Fi signal strength (dBm)
+    const val ENABLE_RTC_SETTING   = true    // MODULE F — RTC switch in Settings (dead code, default OFF)
 }

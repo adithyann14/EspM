@@ -153,6 +153,8 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.sensorCurrentRow.isVisible = FeatureConfig.ENABLE_CURRENT_SENSOR
         b.sensorWaterRow.isVisible   = FeatureConfig.ENABLE_WATER_FLOW
         b.sensorRssiRow.isVisible    = FeatureConfig.ENABLE_WIFI_RSSI
+        b.sensorRtcRow.isVisible     = FeatureConfig.ENABLE_RTC_SETTING
+        b.dividerRssiRtc.isVisible   = FeatureConfig.ENABLE_RTC_SETTING
 
         val anySensorEnabled = FeatureConfig.ENABLE_VOLTAGE_SENSORS ||
                                FeatureConfig.ENABLE_CURRENT_SENSOR  ||
@@ -196,6 +198,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.switchShowCurrent.isChecked = vis.showCurrent
         b.switchShowWater.isChecked   = vis.showWater
         b.switchShowRssi.isChecked    = vis.showRssi
+        b.switchRtc.isChecked         = vm.rtcEnabled.value
 
         val ns = vm.notifSettings.value
         b.switchPersistentNotif.isChecked = ns.persistentEnabled
@@ -223,6 +226,7 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.switchShowRssi.setOnCheckedChangeListener { _, c ->
             vm.updateSensorVisibility(vm.sensorVisibility.value.copy(showRssi = c))
         }
+        b.switchRtc.setOnCheckedChangeListener { _, c -> vm.setRtcEnabled(c) }
     }
 
     // ── Dry-run timeout slider ─────────────────────────────────────────────
@@ -392,7 +396,8 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         val cfg = vm.config.value
         val url = "${cfg.baseUrl}/update"
         b.tvOtaInfo.text =
-            "Sender OTA is always ready.\n\n" +
+            "Sender OTA is always ready.\n" +
+            "(The password must match OTA_PASS in the sketch — default motor123.)\n\n" +
             "Upload via browser or curl:\n" +
             "  URL:  $url\n" +
             "  User: admin\n" +
@@ -408,27 +413,29 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         b.otaInfoCard.isVisible = true
 
         viewLifecycleOwner.lifecycleScope.launch {
+            // enableReceiverOta() already returns a Result — unwrap it, otherwise a
+            // failed request would still be reported as success.
             val result = withContext(Dispatchers.IO) {
-                runCatching { Esp32Repository(vm.config.value).enableReceiverOta(pass) }
+                runCatching { Esp32Repository(vm.config.value).enableReceiverOta(pass).getOrThrow() }
             }
             b.btnEnableOta.isEnabled = true
 
             if (result.isSuccess) {
+                val ip   = result.getOrNull().orEmpty().ifBlank { "<receiver-ip>" }
+                val link = "http://$ip/update"
                 b.tvOtaInfo.text =
-                    "✅ Receiver is now in OTA mode (5 min window).\n\n" +
+                    "✅ Receiver OTA window open for 5 minutes.\n\n" +
                     "Steps:\n" +
-                    "1. On your phone: connect Wi-Fi to\n" +
-                    "     MCReceiver-OTA\n" +
-                    "   Password: $pass\n\n" +
-                    "2. Open browser →\n" +
-                    "     http://192.168.4.1/update\n\n" +
-                    "3. Upload receiver firmware .bin\n\n" +
-                    "4. Reconnect phone to MotorControl\n" +
-                    "   when done."
-                AppLogger.log("OTA", "Receiver OTA triggered successfully")
+                    "1. Keep your phone on the MotorControl Wi-Fi\n\n" +
+                    "2. Open in a browser:\n" +
+                    "     $link\n" +
+                    "   User: admin   Password: $pass\n\n" +
+                    "3. Upload the receiver firmware .bin\n" +
+                    "   (the motor must stay OFF; starts are blocked while the window is open)"
+                AppLogger.log("OTA", "Receiver OTA window open → $link")
             } else {
                 val err = result.exceptionOrNull()?.message ?: "Unknown error"
-                b.tvOtaInfo.text = "❌ Failed to reach sender:\n$err"
+                b.tvOtaInfo.text = "❌ Receiver OTA failed:\n$err"
                 AppLogger.log("OTA", "Receiver OTA failed: $err")
             }
         }

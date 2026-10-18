@@ -16,7 +16,8 @@ class ScheduleAdapter(
 
     inner class VH(val b: ItemScheduleBinding) : RecyclerView.ViewHolder(b.root) {
         fun bind(entry: ScheduleEntry) {
-            b.tvScheduleTime.text = "${entry.startLabel()} → ${entry.stopLabel()}"
+            val overnight = entry.stopHour * 60 + entry.stopMinute <= entry.startHour * 60 + entry.startMinute
+            b.tvScheduleTime.text = "${entry.startLabel()} → ${entry.stopLabel()}" + if (overnight) " (+1 day)" else ""
             b.tvScheduleDays.text = entry.daysLabel()
             b.tvAutoRestart.text  = if (entry.autoRestart) "↺ Auto-restart ON" else "↺ Auto-restart OFF"
 

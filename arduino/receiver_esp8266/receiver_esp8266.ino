@@ -8,9 +8,13 @@
  *  modem sleep OFF (sleeping radios drop UDP).
  *
  *  ── Pins ──────────────────────────────────────────────────────────────
- *  D1 (GPIO5)  → Relay IN, active HIGH
+ *  D0 (GPIO16) → Relay IN  (active HIGH; flip RELAY_ACTIVE_LOW for an active-LOW module)
+ *                CAUTION: GPIO16 is driven HIGH by the chip while it boots/resets, so an
+ *                active-HIGH relay can click for a moment at power-up.  If that matters
+ *                use an active-LOW relay module and set RELAY_ACTIVE_LOW to 1.
  *  D2 (GPIO4)  → Water sensor (INPUT_PULLUP), ACTIVE LOW: LOW=water, HIGH=dry
  *  D3 (GPIO0)  → Servo signal (attached only while moving, idles HIGH)
+ *                Max left / max right / centre angles: see the SERVO TRAVEL block below.
  *  D4 (GPIO2)  → Built-in LED, active LOW: solid = Wi-Fi up, blink = command
  *  A0          → ACS712 current sensor output
  *
@@ -31,6 +35,8 @@
 
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266HTTPUpdateServer.h>
 #include <Servo.h>
 #include <EEPROM.h>
 
@@ -39,10 +45,15 @@ extern "C" {
 }
 
 // ── Pins ──────────────────────────────────────────────────────────────────
-#define PIN_RELAY  D1   // GPIO5   Relay IN, active HIGH
+#define PIN_RELAY  D0   // GPIO16  Relay IN (see RELAY_ACTIVE_LOW below)
 #define PIN_WATER  D2   // GPIO4   Water sensor: HIGH=no water, LOW=water
 #define PIN_SERVO  D3   // GPIO0   Servo signal
 #define PIN_LED    2    // GPIO2   Built-in LED, active LOW (= D4)
+
+// ── Relay polarity ────────────────────────────────────────────────────────
+#ifndef RELAY_ACTIVE_LOW
+#define RELAY_ACTIVE_LOW 0    // 0: pin HIGH = relay ON   1: pin LOW = relay ON
+#endif
 
 // ── Sender AP credentials (must match the sender sketch) ─────────────────
 static const char*    AP_SSID    = "MotorControl";
@@ -51,12 +62,25 @@ static const uint16_t AP_TIMEOUT = 8000;      // max wait for Wi-Fi at boot (ms)
 static const uint16_t UDP_PORT   = 4210;      // same port on sender and receiver
 #define WIFI_RETRY_MS 15000UL                 // re-issue WiFi.begin() while down
 
+// ── OTA (firmware upload over Wi-Fi) ──────────────────────────────────────
+// Opened for 5 minutes by the app (Settings → OTA → Receiver) via the sender.
+// The phone stays on the "MotorControl" Wi-Fi and browses to
+// http://<receiver-ip>/update  (the app shows the address).
+#define OTA_USER       "admin"
+#define OTA_PASS       "motor123"     // keep identical in the sender sketch + app
+#define OTA_WINDOW_MS  300000UL
+
 // ── Water sensor behaviour ────────────────────────────────────────────────
+#ifndef WATER_ACTIVE_LOW
 #define WATER_ACTIVE_LOW      1   // 1: pin LOW = water (your sensor).  0: pin HIGH = water
+                                  //    (0 needs an external ~10k pull-DOWN on D2)
+#endif
+#ifndef BLOCK_START_WHEN_DRY
 #define BLOCK_START_WHEN_DRY  0   // 1: refuse to start when no water at the sensor
                                   // 0: start, then cut off after the dry-run timeout
                                   //    (needed when the sensor is at the pipe END and
                                   //     water only arrives after the pump runs)
+#endif
 #define WATER_DRY_DEBOUNCE_MS  300UL   // wet→dry must hold this long (fail-safe: quick)
 #define WATER_WET_CONFIRM_MS  1000UL   // dry→wet must hold this long (ignores EMI spikes)
 
@@ -124,8 +148,23 @@ typedef struct __attribute__((packed)) {
   uint8_t type; uint32_t dryRunMs;
 } ConfigPacket;                                     // 0x07
 
+// The relay pin is the ONLY thing that defines "motor ON".  GPIO16 (D0) can't
+// be trusted for read-back while configured as an output, so the level this
+// firmware drives is tracked here; relayWrite() is the only writer.
+static bool g_relayOn = false;
+static inline void relayWrite(bool on) {
+  g_relayOn = on;
+  digitalWrite(PIN_RELAY, (on != (bool)RELAY_ACTIVE_LOW) ? HIGH : LOW);
+}
+static inline bool motorGpioOn() { return g_relayOn; }
+
 // ── Wi-Fi / UDP transport ─────────────────────────────────────────────────
 static WiFiUDP       g_udp;
+static ESP8266WebServer       g_otaServer(80);
+static ESP8266HTTPUpdateServer g_otaUpdater;
+static bool          g_otaSetup    = false;
+static bool          g_otaOn       = false;
+static unsigned long g_otaUntil    = 0;
 static bool          g_wifiUp      = false;
 static unsigned long g_lastWifiTry = 0;
 
@@ -154,26 +193,66 @@ static void sendLogFmt(const char* fmt, ...) {
   sendLogToSender(buf);
 }
 
-// ── ACS712  (5A module, 3.3 V supply) ────────────────────────────────────
+// ── ACS712 current sensor ─────────────────────────────────────────────────
+// DISABLED for now (0).  "Motor ON" is decided ONLY by the relay GPIO (D0);
+// the current sensor takes no part in it.  With 0 the ADC is never read,
+// stall detection is off, and current is reported as 0 A.
+//
+// Why it showed current with nothing running (so you can fix it before
+// setting this to 1):
+//  1. ACS_ZERO_V is a guess.  A stock ACS712 module on 5 V idles at 2.5 V and
+//     its sensitivity is 185 mV/A; the constants below only fit a 3.3 V part.
+//     Every 0.122 V of error shows up as a phantom 1 A.
+//  2. No zero calibration, and the ESP8266 ADC is noisy/offset by tens of mV
+//     (tens of mV = a few tenths of an amp here).
+//  3. Mains current is AC.  Averaging instantaneous samples taken every 50 ms
+//     is not an RMS reading: it aliases, so it can read "current" at rest and
+//     near 0 A while the motor runs.
+// To re-enable: measure the idle voltage as zero at boot (relay OFF), take the
+// RMS over ≥100 ms, and add a dead-band of ~0.15 A.
+#ifndef CURRENT_SENSOR_ENABLED
+#define CURRENT_SENSOR_ENABLED 0
+#endif
+
 static const float ACS_ZERO_V        = 1.65f;
 static const float ACS_SENS_V_PER_A  = 0.122f;
 static const float CURRENT_RUN_THRESH = 0.10f;
 #define ACS_ALPHA     0.15f
 #define ACS_SAMPLE_MS 50UL
 
-// ── Servo ─────────────────────────────────────────────────────────────────
-#define SERVO_NEUTRAL  90
-#define SERVO_START     0
-#define SERVO_STOP    180
-#define SERVO_HOLD_MS 800UL   // servo travel time before the relay changes
-#define SERVO_BACK_MS 500UL   // return-to-neutral time before detaching
+// ══ SERVO TRAVEL  —  edit these to match your mechanism ═══════════════════
+//  Angles in degrees.  0° = MAX LEFT end stop,  180° = MAX RIGHT end stop.
+//  Every move is clamped between the two limits, so a wrong value elsewhere
+//  can never drive the horn past them.
+#ifndef SERVO_MAX_LEFT_DEG
+#define SERVO_MAX_LEFT_DEG    0      // full left
+#endif
+#ifndef SERVO_MAX_RIGHT_DEG
+#define SERVO_MAX_RIGHT_DEG   180    // full right
+#endif
+#ifndef SERVO_CENTER_DEG
+#define SERVO_CENTER_DEG      90     // rest position after every press
+#endif
+#define SERVO_START_DEG   SERVO_MAX_LEFT_DEG    // START press  → max left
+#define SERVO_STOP_DEG    SERVO_MAX_RIGHT_DEG   // STOP  press  → max right
+//  Pulse widths the Servo library maps to 0° and 180° (typical hobby servo)
+#ifndef SERVO_PULSE_MIN_US
+#define SERVO_PULSE_MIN_US    500
+#endif
+#ifndef SERVO_PULSE_MAX_US
+#define SERVO_PULSE_MAX_US    2400
+#endif
+#define SERVO_HOLD_MS 800UL   // time at the end stop before the relay changes
+#define SERVO_BACK_MS 500UL   // time to return to centre before detaching
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ── Timing constants ──────────────────────────────────────────────────────
 #define WATER_TIMEOUT_DEFAULT_MS 10000UL
 static uint32_t g_dryRunMs = WATER_TIMEOUT_DEFAULT_MS;
 #define STALL_TIMEOUT_MS         5000UL
 #define STATUS_INTERVAL_MS       1000UL
-#define TIMER_SAVE_MS           10000UL
+// Flash wear: checkpoint only AUTO-RESTART timers, every 2 minutes (see the sender sketch).
+#define TIMER_SAVE_MS           120000UL
 #define BLINK_MS                  150UL
 
 // ── Servo state machine ───────────────────────────────────────────────────
@@ -188,7 +267,19 @@ static unsigned long servoTimer  = 0;
 // ── Motor / command state ─────────────────────────────────────────────────
 static volatile bool     g_pendingOn  = false;
 static volatile bool     g_pendingOff = false;
-static volatile uint32_t g_lastSeq    = 0;
+// Remember the last 8 command sequence numbers.  The sender sends every command 3 times,
+// so a copy of an OLD "ON" that arrives late (after a newer "OFF") must be dropped, not
+// obeyed - comparing only with the previous number would let it through.
+static uint32_t g_seqRing[8];
+static uint8_t  g_seqRingN   = 0;
+static uint8_t  g_seqRingPos = 0;
+static bool seqDuplicate(uint32_t s) {
+  for (uint8_t i = 0; i < g_seqRingN; i++) if (g_seqRing[i] == s) return true;
+  g_seqRing[g_seqRingPos] = s;
+  g_seqRingPos = (uint8_t)((g_seqRingPos + 1) % 8);
+  if (g_seqRingN < 8) g_seqRingN++;
+  return false;
+}
 static volatile bool     g_rxFlag     = false;
 static bool              g_motorOn    = false;
 static uint8_t           g_queuedCmd  = 0;  // 0=none 1=ON 2=OFF
@@ -226,7 +317,7 @@ static unsigned long g_timerLastSaveMs = 0;
 struct SchedEntry { uint8_t startH,startM,stopH,stopM,days,autoRestart,enabled,pad; };
 static uint8_t       g_schedCount = 0;
 static SchedEntry    g_scheds[8]  = {};
-static int           g_lastActedMinute  = -1;
+static uint32_t      g_lastActedEpochMin = 0;   // minute (since 1970) already acted on
 static unsigned long g_schedLastCheckMs = 0;
 
 // ── RTC / epoch ───────────────────────────────────────────────────────────
@@ -236,6 +327,20 @@ static unsigned long g_epochMs    = 0;
 
 static uint32_t currentEpoch() { return g_epoch + (uint32_t)((millis() - g_epochMs) / 1000UL); }
 static uint8_t  epochDayBit(uint32_t e) { return (uint8_t)(((e / 86400UL) + 4UL) % 7UL); }
+
+// millis() wraps every 49.7 days.  The clock is "g_epoch at g_epochMs + elapsed", so
+// without re-basing, a controller that runs that long WITHOUT a phone re-sync would
+// jump back 17 h 02 m 47 s and fire every schedule at the wrong time of day.
+// Folding whole elapsed seconds into g_epoch keeps the clock right indefinitely.
+static void rebaseClock() {
+  if (g_epoch == 0) return;
+  uint32_t el = millis() - g_epochMs;
+  if (el >= 3600000UL) {                  // at most once an hour
+    uint32_t secs = el / 1000UL;
+    g_epoch   += secs;
+    g_epochMs += secs * 1000UL;           // keeps the sub-second remainder
+  }
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 //  EEPROM
@@ -262,13 +367,28 @@ static void eeSave() {
 }
 
 static void eeLoad() {
+  // Dry-run timeout has its own marker: it is saved the moment the app sets it,
+  // even if no timer/schedule was ever stored (EE_MAGIC still blank).
+  if (EEPROM.read(EE_DRYRUN_MAGIC) == EE_DRYRUN_MAGIC_VAL) {
+    uint32_t d = eeReadU32(EE_DRYRUN_MS);
+    if (d >= 5000UL && d <= 60000UL) g_dryRunMs = d;
+  }
+  Serial.printf("[RECV] dry-run timeout %lus\n", (unsigned long)(g_dryRunMs / 1000UL));
   if (EEPROM.read(EE_MAGIC) != EE_MAGIC_VAL) { Serial.println("[RECV] EEPROM blank"); return; }
+  // A power cut in the middle of a flash write can leave the magic byte valid and the rest
+  // erased (0xFF).  Every flag must therefore be EXACTLY 0 or 1 (0xFF is not "true"), and
+  // every number is range-checked - otherwise a half-written timer (136 years left) plus a
+  // "motor was on" flag would start the pump at boot with nothing to stop it.
   g_timerTotal   = eeReadU32(EE_TIMER_TOTAL);
-  g_timerAutoRst = EEPROM.read(EE_TIMER_AUTO)  != 0;
-  bool wasActive = EEPROM.read(EE_TIMER_ACTIVE) != 0;
+  g_timerAutoRst = EEPROM.read(EE_TIMER_AUTO)  == 1;
+  bool wasActive = EEPROM.read(EE_TIMER_ACTIVE) == 1;
   g_timerRemain  = eeReadU32(EE_TIMER_REM);
-  g_rtcEnabled   = EEPROM.read(EE_RTC_FLAG)     != 0;
+  if (g_timerTotal > 604800UL || g_timerRemain > g_timerTotal) {      // > 7 days or remaining > total = garbage
+    g_timerTotal = 0; g_timerRemain = 0; wasActive = false; g_timerAutoRst = false;
+  }
+  g_rtcEnabled   = EEPROM.read(EE_RTC_FLAG)     == 1;
   g_epoch        = eeReadU32(EE_EPOCH);
+  if (g_epoch < 1000000000UL || g_epoch > 4000000000UL) g_epoch = 0;  // unknown clock: scheduler stays off until the app syncs
   g_epochMs      = millis();
   g_schedCount   = min((uint8_t)8, EEPROM.read(EE_SCHED_COUNT));
   for (uint8_t i = 0; i < 8; i++) {
@@ -276,14 +396,11 @@ static void eeLoad() {
     g_scheds[i].startH      = EEPROM.read(b+0); g_scheds[i].startM      = EEPROM.read(b+1);
     g_scheds[i].stopH       = EEPROM.read(b+2); g_scheds[i].stopM       = EEPROM.read(b+3);
     g_scheds[i].days        = EEPROM.read(b+4); g_scheds[i].autoRestart = EEPROM.read(b+5);
-    g_scheds[i].enabled     = EEPROM.read(b+6);
+    g_scheds[i].enabled     = (EEPROM.read(b+6) == 1);
+    if (g_scheds[i].startH > 23 || g_scheds[i].startM > 59 || g_scheds[i].stopH > 23 || g_scheds[i].stopM > 59)
+      g_scheds[i].enabled = 0;                                         // garbage entry: never fires
   }
-  if (EEPROM.read(EE_DRYRUN_MAGIC) == EE_DRYRUN_MAGIC_VAL) {
-    uint32_t d = eeReadU32(EE_DRYRUN_MS);
-    if (d >= 5000UL && d <= 60000UL) g_dryRunMs = d;
-  }
-  bool motorWasOn = EEPROM.read(EE_MOTOR_WAS_ON) != 0;
-  Serial.printf("[RECV] dry-run timeout %lus\n", (unsigned long)(g_dryRunMs / 1000UL));
+  bool motorWasOn = EEPROM.read(EE_MOTOR_WAS_ON) == 1;
   Serial.printf("[RECV] EEPROM  timer=%lus(%s)  sched=%d  motorWasOn=%d\n",
     (unsigned long)g_timerTotal, wasActive?"active":"idle",
     (int)g_schedCount, (int)motorWasOn);
@@ -298,6 +415,10 @@ static void eeLoad() {
 // ══════════════════════════════════════════════════════════════════════════
 
 static void updateCurrentEMA(unsigned long now) {
+#if !CURRENT_SENSOR_ENABLED
+  (void)now;
+  return;                                   // ADC untouched while disabled
+#endif
   if (now - g_acsLastMs < ACS_SAMPLE_MS) return;
   g_acsLastMs = now;
   float voltage = (analogRead(A0) / 1023.0f) * 3.3f;
@@ -312,8 +433,8 @@ static void updateCurrentEMA(unsigned long now) {
 static void sendStatusNow() {
   StatusPacket pkt;
   pkt.type    = 0x02;
-  pkt.current = g_currentSmooth;
-  pkt.motorOn = g_motorOn ? 1 : 0;
+  pkt.current = CURRENT_SENSOR_ENABLED ? g_currentSmooth : 0.0f;
+  pkt.motorOn = motorGpioOn() ? 1 : 0;      // the relay pin itself is the truth
   pkt.waterOk = g_wet ? 1 : 0;              // real, debounced sensor state
   pkt.stall   = g_stallDetected ? 1 : 0;
   pkt.seq     = ++g_statusSeq;
@@ -325,8 +446,8 @@ static void sendStatusNow() {
 static void sendStatusPeriodic(unsigned long now) {
   if (now - g_lastStatusMs < STATUS_INTERVAL_MS) return;
   sendStatusNow();
-  Serial.printf("[RECV] I=%.2fA  relay=%d  water=%s(pin=%s)  stall=%d  timer=%lus  rssi=%ddBm\n",
-    g_currentSmooth, (int)g_motorOn,
+  Serial.printf("[RECV] relay(GPIO)=%d  water=%s(pin=%s)  stall=%d  timer=%lus  rssi=%ddBm\n",
+    (int)motorGpioOn(),
     g_wet ? "WET" : "DRY", digitalRead(PIN_WATER) == LOW ? "LOW" : "HIGH",
     (int)g_stallDetected, (unsigned long)g_timerRemain,
     wifiIsUp() ? (int)WiFi.RSSI() : 0);
@@ -342,7 +463,10 @@ static void deactivateMotor();
 // A permanently attached servo keeps a timer ISR running that jitters the
 // Wi-Fi stack, and GPIO0 held LOW at reset would drop the ESP into flash mode.
 static void servoMove(int angle) {
-  if (!motorServo.attached()) motorServo.attach(PIN_SERVO, 500, 2400);
+  int lo = min(SERVO_MAX_LEFT_DEG, SERVO_MAX_RIGHT_DEG);
+  int hi = max(SERVO_MAX_LEFT_DEG, SERVO_MAX_RIGHT_DEG);
+  angle = constrain(angle, lo, hi);                       // never past the end stops
+  if (!motorServo.attached()) motorServo.attach(PIN_SERVO, SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US);
   motorServo.write(angle);
 }
 static void servoRelease() {
@@ -351,16 +475,24 @@ static void servoRelease() {
   digitalWrite(PIN_SERVO, HIGH);
 }
 
-static void beginServoPress(ServoIntent intent) {
-  servoIntent = intent;
-  servoMove(intent == ServoIntent::STARTING ? SERVO_START : SERVO_STOP);
+// NOTE: no sketch-defined type may appear in a function signature.  The Arduino IDE
+// inserts auto-generated prototypes above the FIRST function in the file, i.e. above
+// the enum declarations further down, and the build would fail with "'ServoIntent'
+// has not been declared".  That is why this takes a plain bool.
+static void beginServoPress(bool starting) {
+  servoIntent = starting ? ServoIntent::STARTING : ServoIntent::STOPPING;
+  int target = starting ? SERVO_START_DEG : SERVO_STOP_DEG;
+  servoMove(target);
   servoState = ServoState::PRESSING; servoTimer = millis();
-  Serial.println(intent == ServoIntent::STARTING ? "[RECV] servo→0° (START)"
-                                                  : "[RECV] servo→180° (STOP)");
+  Serial.printf("[RECV] servo→%d° (%s)\n", target, starting ? "START" : "STOP");
 }
 
 static void activateMotor() {
   if (servoState != ServoState::IDLE || g_motorOn) return;
+  if (g_otaOn) {
+    sendLogToSender("[RECV] start blocked — OTA window open");
+    return;
+  }
 #if BLOCK_START_WHEN_DRY
   if (!g_wet) {
     sendLogToSender("[RECV] ✗ WATER GUARD — no water, start BLOCKED");
@@ -368,19 +500,19 @@ static void activateMotor() {
     return;
   }
 #endif
-  beginServoPress(ServoIntent::STARTING);
+  beginServoPress(true);
 }
 
 static void deactivateMotor() {
   if (servoState != ServoState::IDLE || !g_motorOn) return;
-  beginServoPress(ServoIntent::STOPPING);
+  beginServoPress(false);
 }
 
 // SAFETY CUT: drop the relay right now, no matter what the servo is doing.
 // Used by the dry-run guard.  The servo STOP press (if free) follows as a
 // courtesy so the starter's own button state matches.
 static void cutMotorNow(const char* why) {
-  digitalWrite(PIN_RELAY, LOW);
+  relayWrite(false);
   g_motorOn = false;
   g_dryStartMs = 0;
   g_stallTimer = 0; g_stallDetected = false;
@@ -388,7 +520,7 @@ static void cutMotorNow(const char* why) {
   sendLogToSender(why);
   EEPROM.write(EE_MOTOR_WAS_ON, 0); EEPROM.commit();
   sendStatusNow();
-  if (servoState == ServoState::IDLE) beginServoPress(ServoIntent::STOPPING);
+  if (servoState == ServoState::IDLE) beginServoPress(false);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -400,7 +532,7 @@ static void handleServo(unsigned long now) {
     case ServoState::PRESSING:
       if (now - servoTimer >= SERVO_HOLD_MS) {
         if (servoIntent == ServoIntent::STARTING) {
-          digitalWrite(PIN_RELAY, HIGH);
+          relayWrite(true);
           g_motorOn = true;
           g_dryStartMs = 0;                       // fresh dry-run window
           g_stallTimer = 0; g_stallDetected = false;
@@ -408,7 +540,7 @@ static void handleServo(unsigned long now) {
           EEPROM.write(EE_MOTOR_WAS_ON, 1); EEPROM.commit();
           sendStatusNow();
         } else if (servoIntent == ServoIntent::STOPPING) {
-          digitalWrite(PIN_RELAY, LOW);
+          relayWrite(false);
           if (g_motorOn) {                        // (already false after a safety cut)
             g_motorOn = false;
             g_dryStartMs = 0;
@@ -418,7 +550,7 @@ static void handleServo(unsigned long now) {
             sendStatusNow();
           }
         }
-        servoMove(SERVO_NEUTRAL);
+        servoMove(SERVO_CENTER_DEG);
         servoState = ServoState::RETURNING; servoTimer = now;
       }
       break;
@@ -486,6 +618,10 @@ static void handleWaterSensor(unsigned long now) {
 // ══════════════════════════════════════════════════════════════════════════
 
 static void handleStallDetect(unsigned long now) {
+#if !CURRENT_SENSOR_ENABLED
+  (void)now; g_stallTimer = 0; g_stallDetected = false;
+  return;                                   // no current sensor → no stall logic
+#endif
   if (!g_motorOn) { g_stallTimer = 0; g_stallDetected = false; return; }
   if (fabsf(g_currentSmooth) < CURRENT_RUN_THRESH) {
     if (g_stallTimer == 0) g_stallTimer = now;
@@ -516,7 +652,7 @@ static void handleTimerTick(unsigned long now) {
     EEPROM.write(EE_TIMER_ACTIVE, 0); eeWriteU32(EE_TIMER_REM, 0); EEPROM.commit();
   } else {
     g_timerRemain -= elapsed;
-    if (now - g_timerLastSaveMs >= TIMER_SAVE_MS) {
+    if (g_timerAutoRst && now - g_timerLastSaveMs >= TIMER_SAVE_MS) {
       g_timerLastSaveMs = now;
       eeWriteU32(EE_TIMER_REM, g_timerRemain); EEPROM.commit();
     }
@@ -531,25 +667,31 @@ static void handleScheduler(unsigned long now) {
   if (now - g_schedLastCheckMs < 15000UL) return;
   g_schedLastCheckMs = now;
   if (g_epoch == 0) return;
-  uint32_t ep  = currentEpoch();
-  uint16_t tod = (uint16_t)((ep % 86400UL) / 60UL);
-  uint8_t  day = epochDayBit(ep);
-  if ((int)tod == g_lastActedMinute) return;
+  uint32_t ep    = currentEpoch();
+  uint32_t epMin = ep / 60UL;
+  if (epMin == g_lastActedEpochMin) return;       // already acted in this exact minute
+  uint16_t tod   = (uint16_t)(epMin % 1440UL);
+  uint8_t  today = epochDayBit(ep);
+  uint8_t  yday  = (uint8_t)((today + 6) % 7);
   for (uint8_t i = 0; i < g_schedCount; i++) {
     SchedEntry& s = g_scheds[i];
     if (!s.enabled) continue;
-    if (!(s.days & (1 << day))) continue;
     uint16_t startTod = s.startH * 60 + s.startM;
     uint16_t stopTod  = s.stopH  * 60 + s.stopM;
-    if (tod == startTod) {
+    // A window that ends at/before its start time runs overnight: its STOP
+    // falls on the next calendar day, but the day mask belongs to the day it
+    // STARTED on (otherwise a Mon 22:00→06:00 schedule never stops on Tuesday).
+    bool    overnight = (stopTod <= startTod);
+    uint8_t startDay  = overnight ? yday : today;
+    if (tod == startTod && (s.days & (1 << today))) {
       Serial.printf("[SCHED] slot %d → ON  (%02d:%02d)\n", i, s.startH, s.startM);
       if (servoState == ServoState::IDLE) activateMotor(); else g_queuedCmd = 1;
-      g_lastActedMinute = (int)tod; break;
+      g_lastActedEpochMin = epMin; break;
     }
-    if (tod == stopTod) {
+    if (tod == stopTod && (s.days & (1 << startDay))) {
       Serial.printf("[SCHED] slot %d → OFF (%02d:%02d)\n", i, s.stopH, s.stopM);
       if (servoState == ServoState::IDLE) deactivateMotor(); else g_queuedCmd = 2;
-      g_lastActedMinute = (int)tod; break;
+      g_lastActedEpochMin = epMin; break;
     }
   }
 }
@@ -564,8 +706,7 @@ static void processPacket(uint8_t* data, uint8_t len) {
     case 0x01: {
       if (len < sizeof(CmdPacket)) return;
       CmdPacket pkt; memcpy(&pkt, data, sizeof(pkt));
-      if (pkt.seq == g_lastSeq) return;   // duplicate filter
-      g_lastSeq = pkt.seq;
+      if (seqDuplicate(pkt.seq)) return;   // repeat of a command already handled
       g_rxFlag  = true;
       if (pkt.cmd == 0x01) g_pendingOn  = true;
       if (pkt.cmd == 0x02) g_pendingOff = true;
@@ -590,8 +731,8 @@ static void processPacket(uint8_t* data, uint8_t len) {
       break;
     }
     case 0x05: {
-      if (len < 2) return;
-      SchedPacket pkt; memcpy(&pkt, data, min((size_t)len, sizeof(pkt)));
+      if (len < sizeof(SchedPacket)) return;           // a short packet would leave garbage in the entries
+      SchedPacket pkt; memcpy(&pkt, data, sizeof(pkt));
       g_schedCount = min((uint8_t)8, pkt.count);
       for (uint8_t i = 0; i < g_schedCount; i++) {
         g_scheds[i].startH      = pkt.entries[i].startH;
@@ -617,12 +758,26 @@ static void processPacket(uint8_t* data, uint8_t len) {
       if (len < sizeof(ConfigPacket)) return;
       ConfigPacket pkt; memcpy(&pkt, data, sizeof(pkt));
       if (pkt.dryRunMs >= 5000UL && pkt.dryRunMs <= 60000UL) {
+        bool same = (g_dryRunMs == pkt.dryRunMs) && EEPROM.read(EE_DRYRUN_MAGIC) == EE_DRYRUN_MAGIC_VAL;
         g_dryRunMs = pkt.dryRunMs;
-        EEPROM.write(EE_DRYRUN_MAGIC, EE_DRYRUN_MAGIC_VAL);
-        eeWriteU32(EE_DRYRUN_MS, g_dryRunMs);
-        EEPROM.commit();                       // survives reboot / power cut
+        if (!same) {                           // the sender re-sends it on every resync: skip identical flash writes
+          EEPROM.write(EE_DRYRUN_MAGIC, EE_DRYRUN_MAGIC_VAL);
+          eeWriteU32(EE_DRYRUN_MS, g_dryRunMs);
+          EEPROM.commit();                     // survives reboot / power cut
+        }
         sendLogFmt("[RECV] dry-run timeout → %lus", (unsigned long)(g_dryRunMs / 1000UL));
       }
+      break;
+    }
+    case 0x08: {                               // open the OTA window
+      if (g_motorOn || servoState != ServoState::IDLE) {
+        sendLogToSender("[RECV] OTA refused — motor is ON");
+        break;
+      }
+      if (!g_otaSetup) { g_otaUpdater.setup(&g_otaServer, "/update", OTA_USER, OTA_PASS); g_otaSetup = true; }
+      if (!g_otaOn)    { g_otaServer.begin(); g_otaOn = true; }
+      g_otaUntil = millis() + OTA_WINDOW_MS;
+      sendLogFmt("[RECV] OTA open 5 min http://%s/update", WiFi.localIP().toString().c_str());
       break;
     }
     default: break;
@@ -671,7 +826,7 @@ static void pollUdp() {
 void setup() {
   // Relay OFF must be first
   pinMode(PIN_RELAY, OUTPUT);
-  digitalWrite(PIN_RELAY, LOW);
+  relayWrite(false);                      // relay OFF (pin level depends on RELAY_ACTIVE_LOW)
 
   Serial.begin(115200);
   delay(100);
@@ -679,7 +834,9 @@ void setup() {
 
   pinMode(PIN_LED, OUTPUT); digitalWrite(PIN_LED, HIGH);  // off (active LOW)
 
-  pinMode(PIN_WATER, INPUT_PULLUP);
+  // Active-LOW sensor: internal pull-up, so a cut/disconnected wire reads HIGH = "dry" (fail-safe).
+  // Active-HIGH sensor: NO pull-up (it would make a disconnected wire read "wet"); use an external pull-down.
+  pinMode(PIN_WATER, WATER_ACTIVE_LOW ? INPUT_PULLUP : INPUT);
   g_wetRaw = g_wet = waterPinWet();
   g_wetRawSince = millis();
   Serial.printf("[RECV] water at boot: %s  (pin=%s, %s)\n",
@@ -731,8 +888,18 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  g_motorOn = motorGpioOn();                // motor state = relay pin, nothing else
+
   handleWifi(now);
   pollUdp();
+  rebaseClock();
+  if (g_otaOn) {
+    g_otaServer.handleClient();
+    if ((long)(now - g_otaUntil) >= 0) {
+      g_otaServer.close(); g_otaOn = false;
+      sendLogToSender("[RECV] OTA window closed");
+    }
+  }
   updateCurrentEMA(now);
   updateWaterSensor(now);
 

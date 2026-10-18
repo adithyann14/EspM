@@ -78,6 +78,10 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     private val _dryRunSeconds = MutableStateFlow(prefs.getInt(K_DRY_RUN, 10))
     val dryRunSeconds: StateFlow<Int> = _dryRunSeconds.asStateFlow()
 
+    // ── RTC switch (dead code: default OFF = phone time is the clock) ─────
+    private val _rtcEnabled = MutableStateFlow(prefs.getBoolean(K_RTC, false))
+    val rtcEnabled: StateFlow<Boolean> = _rtcEnabled.asStateFlow()
+
     // ── History ───────────────────────────────────────────────────────────
     private val _motorHistory = MutableStateFlow(loadHistoryLocal())
     val motorHistory: StateFlow<List<MotorEvent>> = _motorHistory.asStateFlow()
@@ -157,8 +161,13 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 // ── AppLogger transitions ─────────────────────────────
-                if (!prev.isConnected && new.isConnected)
+                if (!prev.isConnected && new.isConnected) {
                     AppLogger.log("CONN",    "Connected → ${_config.value.baseUrl}")
+                    if (schedulePushPending) {
+                        AppLogger.log("SCHED", "Re-sending schedules that failed earlier")
+                        pushSchedulesToEsp(_schedules.value)
+                    }
+                }
                 if (prev.isConnected && !new.isConnected)
                     AppLogger.log("CONN",    "Connection lost")
                 if (prev.motorOn != new.motorOn)
@@ -274,22 +283,57 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         }.onFailure { AppLogger.log("SCHED", "Clear failed: ${it.message}") }
     }
 
+    // True while the list stored on the phone has NOT reached the ESP (push failed,
+    // e.g. phone was not on the ESP Wi-Fi).  Retried automatically on reconnect — and kept
+    // in SharedPreferences so the retry survives the app being closed in between.
+    private var schedulePushPending: Boolean
+        get() = prefs.getBoolean(K_SCHED_PENDING, false)
+        set(v) { prefs.edit().putBoolean(K_SCHED_PENDING, v).apply() }
+
     private suspend fun pushSchedulesToEsp(entries: List<ScheduleEntry>) {
         repo().pushSchedules(entries)
-            .onFailure { AppLogger.log("SCHED", "Push failed: ${it.message}") }
+            .onSuccess { schedulePushPending = false }
+            .onFailure {
+                schedulePushPending = true
+                AppLogger.log("SCHED", "Push failed: ${it.message} — will retry when connected")
+            }
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    //  Time sync (always phone time; no RTC toggle)
+    //  Time sync — phone time is ALWAYS the source.
+    //  The RTC switch (Settings → Sensors) is dead code: it only tells the
+    //  ESPs to store an "RTC enabled" flag; the firmware has no DS3231 driver,
+    //  so the 30 s phone-time sync keeps running whatever the switch says.
     // ═════════════════════════════════════════════════════════════════════
+
+    /**
+     * Seconds since 1970 in the PHONE'S LOCAL time (UTC + current time-zone/DST offset).
+     * The firmware has no time zone: it reads (epoch % 86400) as the time of day and
+     * compares it with the schedule times typed in the app.  Sending plain UTC made
+     * every schedule run on UTC clock time instead of local time.
+     */
+    private fun localEpochSeconds(): Long {
+        val now = System.currentTimeMillis()
+        return (now + java.util.TimeZone.getDefault().getOffset(now)) / 1000L
+    }
+
+    fun setRtcEnabled(on: Boolean) {
+        if (_rtcEnabled.value == on) return
+        _rtcEnabled.value = on
+        prefs.edit().putBoolean(K_RTC, on).apply()
+        AppLogger.log("TIME", if (on) "RTC flag ON (no RTC code in firmware — phone time still used)"
+                              else    "RTC flag OFF — phone time")
+        viewModelScope.launch {
+            repo().syncTime(localEpochSeconds(), on)
+        }
+    }
 
     private fun startTimeSync() {
         timeSyncJob?.cancel()
         timeSyncJob = viewModelScope.launch {
             while (isActive) {
-                val epoch = System.currentTimeMillis() / 1000L
-                // rtcEnabled=false — phone time is always the source
-                repo().syncTime(epoch, false)
+                // Phone time is always sent; the flag is informational only.
+                repo().syncTime(localEpochSeconds(), _rtcEnabled.value)
                 delay(30_000L)
             }
         }
@@ -474,6 +518,8 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         private const val K_NOTIF_PERSISTENT = "notif_persistent"
         private const val K_NOTIF_ALERT      = "notif_alert"
         private const val K_DRY_RUN          = "dry_run_sec"
+        private const val K_RTC              = "rtc_enabled"
+        private const val K_SCHED_PENDING    = "sched_push_pending"
         private const val K_SCHEDULES        = "schedules_json"
         private const val K_HISTORY          = "motor_history"
         private const val MAX_HISTORY        = 500

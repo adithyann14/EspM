@@ -130,8 +130,10 @@ class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
                     Toast.makeText(requireContext(), "Select at least one day", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                if (stopH * 60 + stopM <= startH * 60 + startM) {
-                    Toast.makeText(requireContext(), "Stop time must be after start time", Toast.LENGTH_SHORT).show()
+                // A stop time at/before the start time is an OVERNIGHT window (e.g. 22:00 → 06:00):
+                // the firmware ends it the next morning.  Only identical times are rejected.
+                if (stopH * 60 + stopM == startH * 60 + startM) {
+                    Toast.makeText(requireContext(), "Start and stop time must be different", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
                 vm.addSchedule(ScheduleEntry(
@@ -142,7 +144,10 @@ class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
                     autoRestart = db.switchSchedAutoRestart.isChecked,
                     enabled     = true
                 ))
-                Toast.makeText(requireContext(), "Schedule saved to ESP", Toast.LENGTH_SHORT).show()
+                val overnight = stopH * 60 + stopM < startH * 60 + startM
+                Toast.makeText(requireContext(),
+                    if (overnight) "Schedule saved — runs overnight, stops next day" else "Schedule saved",
+                    Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
