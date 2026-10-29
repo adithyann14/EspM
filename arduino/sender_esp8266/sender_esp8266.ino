@@ -52,8 +52,8 @@ extern "C" {
 // ── Pins ──────────────────────────────────────────────────────────────────
 #define PIN_BTN_ON   D1   // GPIO5
 #define PIN_BTN_OFF  D2   // GPIO4
-#define PIN_LED_ON   D3   // GPIO0  green LED  (motor ON)
-#define PIN_LED_OFF  D7   // GPIO13 red LED    (motor OFF)
+#define PIN_LED_ON   D7   // GPIO13 LED shown when motor ON  (swapped)
+#define PIN_LED_OFF  D3   // GPIO0  LED shown when motor OFF (swapped)
 #define PIN_LED_LINK 2    // GPIO2  on-board LED, active LOW (= D4)
 
 // ── Wi-Fi AP ──────────────────────────────────────────────────────────────

@@ -233,8 +233,8 @@ static const float CURRENT_RUN_THRESH = 0.10f;
 #ifndef SERVO_CENTER_DEG
 #define SERVO_CENTER_DEG      90     // rest position after every press
 #endif
-#define SERVO_START_DEG   SERVO_MAX_LEFT_DEG    // START press  → max left
-#define SERVO_STOP_DEG    SERVO_MAX_RIGHT_DEG   // STOP  press  → max right
+#define SERVO_START_DEG   SERVO_MAX_RIGHT_DEG  // START press  → max right (swapped)
+#define SERVO_STOP_DEG    SERVO_MAX_LEFT_DEG    // STOP  press  → max left (swapped)
 //  Pulse widths the Servo library maps to 0° and 180° (typical hobby servo)
 #ifndef SERVO_PULSE_MIN_US
 #define SERVO_PULSE_MIN_US    500
