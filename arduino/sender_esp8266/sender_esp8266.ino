@@ -516,14 +516,14 @@ static void sendTimerPacket() {
   TimerPacket p;
   p.type = 0x04; p.totalSec = g_timerTotal; p.remainingSec = g_timerRemain;
   p.autoRestart = g_timerAutoRst ? 1 : 0; p.active = g_timerActive ? 1 : 0;
-  commsSend((uint8_t*)&p, sizeof(p));
+  for (uint8_t i = 0; i < 3; i++) { commsSend((uint8_t*)&p, sizeof(p)); delay(15); }  // UDP: a lost CANCEL left a stale timer on the receiver
 }
 
 static void sendSchedPacket() {
   SchedPacket p; memset(&p, 0, sizeof(p));
   p.type = 0x05; p.count = g_schedCount;
   for (uint8_t i = 0; i < 8; i++) p.entries[i] = *(decltype(&p.entries[0]))&g_scheds[i];
-  commsSend((uint8_t*)&p, sizeof(p));
+  for (uint8_t i = 0; i < 3; i++) { commsSend((uint8_t*)&p, sizeof(p)); delay(15); }
 }
 
 static void sendConfigPacket(uint32_t dryRunMs) {
@@ -661,6 +661,32 @@ static String buildStatusJson() {
 }
 
 // ── Route handlers ────────────────────────────────────────────────────────
+
+// ── Built-in web page: open http://192.168.4.1/ in any phone/PC browser ─────
+static const char WEB_PAGE[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>Motor</title>
+<style>body{font-family:sans-serif;text-align:center;margin:0;padding:20px;background:#111;color:#eee}
+button{font-size:22px;padding:18px 34px;margin:8px;border:0;border-radius:12px;color:#fff}
+#on{background:#2e9e4f}#off{background:#c33}#s{font-size:26px;margin:18px}
+input{font-size:20px;width:70px;padding:8px}small{color:#999}</style></head><body>
+<h2>Motor control</h2><div id=s>...</div>
+<button id=on onclick="c('on')">START</button><button id=off onclick="c('off')">STOP</button>
+<h3>Timer</h3><input id=h type=number placeholder=h> <input id=m type=number placeholder=min>
+<button style="background:#36c;font-size:18px;padding:12px 20px" onclick="t()">Set</button>
+<button style="background:#666;font-size:18px;padding:12px 20px" onclick="p('/api/timer/cancel','')">Cancel</button>
+<div id=t><small></small></div>
+<script>
+function p(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:b}).then(r=>r.text())}
+function c(x){p('/api/motor/'+x,'').then(r)}
+function t(){var s=(+h.value||0)*3600+(+m.value||0)*60;if(s>0)p('/api/timer/set','{"seconds":'+s+',"autoRestart":0}').then(r)}
+function r(){fetch('/api/status').then(x=>x.json()).then(j=>{
+s.textContent=!j.linkOk?'Receiver offline':(j.motorOn?'Motor ON':'Motor OFF')+(j.waterOk?'  💧':'  (no water)');
+s.style.color=!j.linkOk?'#f90':(j.motorOn?'#4c4':'#ccc')}).catch(_=>s.textContent='ESP not reachable');
+fetch('/api/timer/status').then(x=>x.json()).then(j=>{var q=j.remaining|0;
+document.querySelector('#t small').textContent=j.active?('Timer: '+Math.floor(q/3600)+'h '+Math.floor(q%3600/60)+'m '+q%60+'s left'):''}).catch(_=>0)}
+r();setInterval(r,2000)
+</script></body></html>)HTML";
+void handleRoot() { server.send_P(200, "text/html", WEB_PAGE); }
 void handleStatus()      { addCorsHeaders(); server.send(200,"application/json",buildStatusJson()); }
 void handleMotorOn()     { sendMotorCommandInternal(true);  addCorsHeaders(); server.send(200,"application/json","{\"success\":true}"); }
 void handleMotorOff()    { sendMotorCommandInternal(false); addCorsHeaders(); server.send(200,"application/json","{\"success\":true}"); }
@@ -965,6 +991,7 @@ void setup() {
   eeLoad();
 
   // HTTP routes
+  server.on("/",                      HTTP_GET,  handleRoot);
   server.on("/api/status",            HTTP_GET,  handleStatus);
   server.on("/api/motor/on",          HTTP_POST, handleMotorOn);
   server.on("/api/motor/off",         HTTP_POST, handleMotorOff);

@@ -721,17 +721,18 @@ static void processPacket(uint8_t* data, uint8_t len) {
     case 0x04: {
       if (len < sizeof(TimerPacket)) return;
       TimerPacket pkt; memcpy(&pkt, data, sizeof(pkt));
+      bool same = (g_timerActive == (pkt.active != 0)) && g_timerTotal == pkt.totalSec &&
+                  g_timerAutoRst == (pkt.autoRestart != 0);   // repeat copy / resync: skip flash write
       g_timerTotal   = pkt.totalSec;
       g_timerRemain  = pkt.remainingSec;
       g_timerAutoRst = (pkt.autoRestart != 0);
-      if (pkt.active && !g_timerActive) {
-        g_timerActive = true; g_timerLastTick = millis();
-        Serial.printf("[RECV] timer set %lus  auto=%d\n",
-                      (unsigned long)pkt.totalSec, (int)pkt.autoRestart);
-      } else if (!pkt.active) {
-        g_timerActive = false; Serial.println("[RECV] timer cancelled");
+      g_timerActive  = (pkt.active != 0 && pkt.remainingSec > 0);
+      g_timerLastTick = millis();
+      if (!g_timerActive) g_timerRemain = 0;
+      if (!same) {
+        Serial.printf("[RECV] timer %s %lus\n", g_timerActive ? "set" : "cancelled", (unsigned long)pkt.totalSec);
+        eeSave();
       }
-      eeSave();
       break;
     }
     case 0x05: {
