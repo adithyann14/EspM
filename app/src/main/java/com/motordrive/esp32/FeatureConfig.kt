@@ -45,5 +45,5 @@ object FeatureConfig {
     const val ENABLE_WATER_FLOW      = true    // MODULE C — active-LOW sensor
     const val ENABLE_SERVER_MODE     = true    // MODULE D — custom base URL
     const val ENABLE_WIFI_RSSI     = true    // MODULE E — Wi-Fi signal strength (dBm)
-    const val ENABLE_RTC_SETTING   = true    // MODULE F — RTC switch in Settings (dead code, default OFF)
+    const val ENABLE_RTC_SETTING   = false   // MODULE F — RTC switch in Settings (dead code, default OFF)
 }

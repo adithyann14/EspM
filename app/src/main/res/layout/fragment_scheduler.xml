@@ -31,6 +31,7 @@
 
             <!-- RTC note chip: tap to go to Settings → Sensors -->
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardRtcNote"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 app:cardElevation="0dp"

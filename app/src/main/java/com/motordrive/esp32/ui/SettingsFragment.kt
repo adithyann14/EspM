@@ -91,6 +91,8 @@ class SettingsFragment : Fragment(R.layout.fragment_settings) {
         applySectionState("sensors",    b.contentSensors,    b.chevronSensors,    animate = false)
         applySectionState("connection", b.contentConnection, b.chevronConnection, animate = false)
         applySectionState("ota",        b.contentOta,        b.chevronOta,        animate = false)
+        b.headerOta.visibility = View.GONE      // OTA hidden (code kept)
+        b.contentOta.visibility = View.GONE
         applySectionState("notif",      b.contentNotif,      b.chevronNotif,      animate = false)
         applySectionState("diag",       b.contentDiag,       b.chevronDiag,       animate = false)
 

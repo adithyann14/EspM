@@ -74,7 +74,7 @@ class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
     }
 
     private fun setupControls() {
-        // "Open" button on the RTC note card → go to Settings
+        b.cardRtcNote.visibility = View.GONE   // phone time is the clock; RTC note hidden
         b.btnGoToRtcSettings.setOnClickListener {
             findNavController().navigate(R.id.action_scheduler_to_settings)
         }
@@ -102,19 +102,19 @@ class SchedulerFragment : Fragment(R.layout.fragment_scheduler) {
         var startH = 6; var startM = 0
         var stopH  = 7; var stopM  = 0
 
-        fun fmt(h: Int, m: Int) = "%02d:%02d".format(h, m)
+        fun fmt(h: Int, m: Int) = "%d:%02d %s".format(if (h % 12 == 0) 12 else h % 12, m, if (h < 12) "AM" else "PM")
         db.btnPickStart.text = fmt(startH, startM)
         db.btnPickStop.text  = fmt(stopH,  stopM)
 
         db.btnPickStart.setOnClickListener {
             TimePickerDialog(requireContext(), { _, h, m ->
                 startH = h; startM = m; db.btnPickStart.text = fmt(h, m)
-            }, startH, startM, true).show()
+            }, startH, startM, false).show()
         }
         db.btnPickStop.setOnClickListener {
             TimePickerDialog(requireContext(), { _, h, m ->
                 stopH = h; stopM = m; db.btnPickStop.text = fmt(h, m)
-            }, stopH, stopM, true).show()
+            }, stopH, stopM, false).show()
         }
 
         MaterialAlertDialogBuilder(requireContext())

@@ -793,6 +793,7 @@ void handleTimerSet() {
   eeSave();
   logFmt("[TIMER] set %lus  autoRestart=%d", (unsigned long)sec, (int)ar);
   sendTimerPacket();
+  if (!g_motorOn) sendMotorCommandInternal(true);    // timer = run for N seconds, then stop
   addCorsHeaders(); server.send(200,"application/json","{\"success\":true}");
 }
 

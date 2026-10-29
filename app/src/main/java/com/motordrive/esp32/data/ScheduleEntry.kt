@@ -14,8 +14,11 @@ data class ScheduleEntry(
     val autoRestart: Boolean = true,
     val enabled:     Boolean = true
 ) {
-    fun startLabel() = "%02d:%02d".format(startHour, startMinute)
-    fun stopLabel()  = "%02d:%02d".format(stopHour,  stopMinute)
+    fun startLabel() = fmt12(startHour, startMinute)
+    fun stopLabel()  = fmt12(stopHour,  stopMinute)
+
+    private fun fmt12(h: Int, m: Int) =
+        "%d:%02d %s".format(if (h % 12 == 0) 12 else h % 12, m, if (h < 12) "AM" else "PM")
 
     fun daysLabel(): String {
         val names = listOf("Su","Mo","Tu","We","Th","Fr","Sa")

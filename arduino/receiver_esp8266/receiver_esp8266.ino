@@ -270,14 +270,14 @@ static volatile bool     g_pendingOff = false;
 // Remember the last 8 command sequence numbers.  The sender sends every command 3 times,
 // so a copy of an OLD "ON" that arrives late (after a newer "OFF") must be dropped, not
 // obeyed - comparing only with the previous number would let it through.
-static uint32_t g_seqRing[8];
-static uint8_t  g_seqRingN   = 0;
-static uint8_t  g_seqRingPos = 0;
+// Drop only the 3 copies of ONE command (same seq, within 3 s).  The old 8-entry ring
+// also dropped REAL commands after a sender reboot (seq restarts at 1) -> "servo doesn't act".
+static uint32_t g_lastSeq = 0xFFFFFFFFUL;
+static unsigned long g_lastSeqMs = 0;
 static bool seqDuplicate(uint32_t s) {
-  for (uint8_t i = 0; i < g_seqRingN; i++) if (g_seqRing[i] == s) return true;
-  g_seqRing[g_seqRingPos] = s;
-  g_seqRingPos = (uint8_t)((g_seqRingPos + 1) % 8);
-  if (g_seqRingN < 8) g_seqRingN++;
+  unsigned long now = millis();
+  if (s == g_lastSeq && (now - g_lastSeqMs) < 3000UL) return true;
+  g_lastSeq = s; g_lastSeqMs = now;
   return false;
 }
 static volatile bool     g_rxFlag     = false;
@@ -458,6 +458,7 @@ static void sendStatusPeriodic(unsigned long now) {
 // ══════════════════════════════════════════════════════════════════════════
 
 static void deactivateMotor();
+static void handleServo(unsigned long now);
 
 // Servo is attached ONLY while it moves, then released with GPIO0 idling HIGH.
 // A permanently attached servo keeps a timer ISR running that jitters the
@@ -485,6 +486,9 @@ static void beginServoPress(bool starting) {
   servoMove(target);
   servoState = ServoState::PRESSING; servoTimer = millis();
   Serial.printf("[RECV] servo→%d° (%s)\n", target, starting ? "START" : "STOP");
+  // Run the whole press blocking (same as the working espfixenos): nothing else touches
+  // the servo pulse train / flash while the arm is moving.
+  while (servoState != ServoState::IDLE) { handleServo(millis()); delay(2); }
 }
 
 static void activateMotor() {
@@ -860,8 +864,6 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.setSleepMode(WIFI_NONE_SLEEP);   // modem sleep drops incoming UDP
-  WiFi.setOutputPower(20.5f);       // max power: 20.5 dBm
-  wifi_set_phy_mode(PHY_MODE_11B);  // 802.11b for best range
   WiFi.begin(AP_SSID, AP_PASS);
   g_lastWifiTry = millis();
   Serial.print("[RECV] joining sender AP");
